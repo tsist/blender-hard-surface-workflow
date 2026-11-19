@@ -1,0 +1,19 @@
+{
+  "vendor/edgeflow/LICENSE": "0b383d5a63da644f628d99c33976ea6487ed89aaa59f0b3257992deac1171e6b",
+  "vendor/edgeflow/SOURCE.md": "e75441a7efefed7492b884c37102c5de0807011473f12e7e1d42b5f041d7d204",
+  "vendor/edgeflow/__init__.py": "64f9233778d13a7c33ac1da13ef2aa0b34a401d358699c61a5bb030cf3cde43e",
+  "vendor/edgeflow/dijkstra.py": "994efb5e595bc9faa7a3caa8c29cd127070eed60b21c5daac7b73329426a37fa",
+  "vendor/edgeflow/edgeloop.py": "959781a92ce4b9ac5dc2495e7236b99413cc3130bcd6477b4b760d351063c8e7",
+  "vendor/edgeflow/interpolate.py": "384056e3c8cbd45b140ba8207fbf1ba782dfe759e46c660ae2e65890cc9f1b42",
+  "vendor/edgeflow/op_set_vertex_curve.py": "1c6b41243490c1dd0f76ef1fb8f55da30597bc55b44a949debc9398fd3764c3c",
+  "vendor/edgeflow/upstream-manifest.toml": "d113644fd4f2d2fd5043d259e6084b696bb3e0b3113c0d9836d9ab81b5193679",
+  "vendor/edgeflow/util.py": "4b41759fb6053cfbac57c7a8b2b835a70be1e8729e6e960451a7678cf19680b5",
+  "vendor/edit_mesh_tools/LICENSE": "0b383d5a63da644f628d99c33976ea6487ed89aaa59f0b3257992deac1171e6b",
+  "vendor/edit_mesh_tools/SOURCE.md": "072cb6a4df88d95f08af0f3750357a647cb4ae3ce5406b2bef54dac4de744572",
+  "vendor/edit_mesh_tools/__init__.py": "13506b829b6349e47df44427452bf1a81df944daa7687d4cf912faab201004a4",
+  "vendor/edit_mesh_tools/mesh_offset_edges.py": "f5dbf8601cce9b25c90a01d340fe16f57c50e3a2029a7358348b608487c25c84",
+  "vendor/edit_mesh_tools/upstream-manifest.toml": "994bba70abb05d083091d51b47a24ac50c4089c968dc494ef1f3e8b986a25daa",
+  "vendor/looptools/LICENSE.txt": "92e8c0f0e4d0f8adc34eef4fa03da369aeb267a5a5f94473df138ff6645f30b9",
+  "vendor/looptools/NOTICE.md": "bd57afeaa7a1a9935f627cc6967df8e413801e0cbd2ecc5b96d9edeec942fe39",
+  "vendor/looptools/upstream.py": "592bf036dbb7253a7adc93aff3783b4d8d82a27c93b2c691b9a3b9d3f05b3de2"
+}

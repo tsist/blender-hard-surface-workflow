@@ -1,0 +1,16 @@
+schema_version = "1.0.0"
+id = "hard_surface_workflow"
+version = "0.3.1"
+name = "Hard Surface Workflow"
+tagline = "Edit mesh loops, surfaces and non-destructive modifier stacks"
+maintainer = "Blender AI"
+type = "add-on"
+tags = ["Modeling", "Mesh"]
+blender_version_min = "5.2.0"
+license = ["SPDX:GPL-3.0-or-later"]
+
+[permissions]
+files = "Read reference images and save multi-view review sheets"
+
+[build]
+paths_exclude_pattern = ["__pycache__/", "*.pyc", "qa/", ".git/", "/*.zip"]
