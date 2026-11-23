@@ -36,7 +36,8 @@ trap 'rm -rf -- "$work"' EXIT
 # Higher-precedence user overrides would defeat BLENDER_USER_RESOURCES.
 unset BLENDER_USER_CONFIG BLENDER_USER_SCRIPTS BLENDER_USER_DATAFILES BLENDER_USER_EXTENSIONS
 export BLENDER_USER_RESOURCES="$work/profile"
-mkdir -p -- "$BLENDER_USER_RESOURCES"
+export XDG_CACHE_HOME="$work/cache"
+mkdir -p -- "$BLENDER_USER_RESOURCES" "$XDG_CACHE_HOME"
 
 printf '\n[1/3] Installing and enabling extension in an isolated profile\n'
 "$blender" --background -noaudio --offline-mode --command extension install-file --repo user_default --enable "$archive"
