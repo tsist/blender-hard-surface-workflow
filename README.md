@@ -1,15 +1,21 @@
 # Hard Surface Workflow
 
-This repository contains the project-authored Hard Surface Workflow Blender extension. It provides editable modeling tools, command recipes and panels. Blender 5.3 routes qualified Curve and GStretch configurations to native operators. Other LoopTools configurations use the compatibility implementation supplied at build time.
+Hard Surface Workflow is an editable mesh and modifier-stack extension for Blender. Version **0.3.5** supports **Blender 5.3.0**. It adds precision mesh editing and geometry inspection and retains the native and compatibility LoopTools routes.
 
-## Source release 0.3.1
+## Build and install
 
-The public release contains the project's source. A local installable archive requires a separately supplied, qualified dependency bundle. The dependency members are from LoopTools 4.7.7, EdgeFlow and Edit Mesh Tools, including the compatibility changes present in the original local distribution. The recorded digests select the exact members.
+The public repository contains the project-authored extension source. The build uses a separately supplied, qualified dependency bundle containing the pinned LoopTools, EdgeFlow and Edit Mesh Tools members. The 17 dependency members from the previously qualified 0.3.1 package are byte-identical and can be reused.
 
 ```sh
-python build.py --dependency-bundle /path/to/qualified-hard-surface-package.zip --output hard_surface_workflow-0.3.1.zip
+python build.py --dependency-bundle /path/to/qualified-hard-surface-package.zip --output hard_surface_workflow-0.3.5.zip
 ```
 
-The builder checks every dependency SHA-256 before starting the archive and keeps the upstream notices from the dependency bundle. Install the resulting ZIP via **Preferences → Get Extensions → Install from Disk**. The assembled extension was checked on Windows Blender 5.3.0 and 5.2.1 LTS. Six native configurations and ten compatibility configurations were checked on 5.3. The public repository does not distribute the dependency bundle.
+The builder verifies every dependency member against `dependencies.json` and preserves the upstream notices. Install the resulting ZIP through **Preferences → Extensions → Install from Disk**. Windows Blender 5.3.0 was used to validate the extension and verify the saved split-face and GStretch examples.
 
-Project source is GPL-3.0-or-later. See the retained licence in the extension directory.
+## Modeling skill
+
+The [hard surface modeling skill](skills/blender-hard-surface-modeling/SKILL.md) covers subdivision cages, curved surfaces, native operators, geometry checks, and save and recovery procedures. It includes the step-by-step guides, illustrated references, and distilled case studies through tier four. Install the skill by copying its complete directory to your agent's skill directory.
+
+The native workflows and extension panel use Blender 5.3.0. Examples marked `blenderctl` and the two rewind planners require the matching workspace CLI 0.91.0. The older [public Blender CLI releases](https://github.com/tsist/blenderctl/releases) do not provide those 0.3.5 routes.
+
+The extension source is GPL-3.0-or-later. See the [license](hard_surface_workflow/LICENSE).

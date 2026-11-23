@@ -16,11 +16,22 @@ CURVE_AXES = [(f"{sign}_{x}", f"{'+' if sign == 'POS' else '−'}{x}", "")
               for sign in ("POS", "NEG") for x in "XYZ"]
 BOOL_MODES = [(mode, mode.title(), "") for mode in ("DIFFERENCE", "UNION", "INTERSECT")]
 _UI_FIELDS = {
-    "BEVEL": [("width", "distance", "Width"), ("segments", "segments", "Segments")],
-    "SOLIDIFY": [("thickness", "distance", "Thickness"), ("offset", "offset", "Offset")],
-    "MIRROR": [("use_axis", "axes", "Axes"), ("use_clip", "flag", "Clipping")],
+    "BEVEL": [("width", "distance", "Width"), ("segments", "segments", "Segments"),
+              ("limit_method", "limit_method", "Limit Method"), ("affect", "affect", "Affect"),
+              ("edge_weight", "edge_weight", "Edge Weight Attribute"),
+              ("vertex_weight", "vertex_weight", "Vertex Weight Attribute"),
+              ("vertex_group", "bevel_group", "Vertex Group"),
+              ("miter_outer", "miter_outer", "Outer Miter"), ("miter_inner", "miter_inner", "Inner Miter")],
+    "SOLIDIFY": [("thickness", "distance", "Local Thickness"), ("offset", "offset", "Offset"),
+                 ("use_even_offset", "even_offset", "Even Offset")],
+    "MIRROR": [("use_axis", "axes", "Axes"), ("use_clip", "flag", "Clipping"),
+               ("mirror_object", "reference_name", "Mirror Plane Object"), ("use_mirror_merge", "merge", "Merge"),
+               ("merge_threshold", "positive_distance", "Merge Threshold")],
     "SUBSURF": [("levels", "subdivision", "Viewport Levels"), ("render_levels", "render_levels", "Render Levels")],
-    "ARRAY": [("count", "count", "Count"), ("constant_offset_displace", "vector", "Local Offset")],
+    "ARRAY": [("count", "count", "Count"), ("use_constant_offset", "constant", "Constant Offset"),
+              ("constant_offset_displace", "vector", "Local Offset"),
+              ("use_relative_offset", "relative", "Relative Offset"),
+              ("relative_offset_displace", "relative_vector", "Relative Factors")],
     "SCREW": [("axis", "axis", "Axis"), ("angle", "angle", "Angle"), ("steps", "steps", "Steps")],
     "WELD": [("merge_threshold", "positive_distance", "Merge Threshold"), ("mode", "weld_mode", "Mode")],
     "WEIGHTED_NORMAL": [("weight", "weight", "Weight"), ("keep_sharp", "flag", "Keep Sharp")],
@@ -56,6 +67,12 @@ def _call(operator, context, tool, params, message=None):
         return {"CANCELLED"}
     if message:
         operator.report({"INFO"}, message(outcome) if callable(message) else message)
+    elif "array_step" in outcome:
+        step = outcome["array_step"]
+        if step["status"] == "computed_input_step":
+            operator.report({"INFO"}, "Array step (local BU): " + ", ".join(f"{x:.6g}" for x in step["local_step_bu"]))
+        else:
+            operator.report({"INFO"}, step["reason"] + ". Measure evaluated copy positions.")
     return {"FINISHED"}
 
 
@@ -77,6 +94,18 @@ class HSW_OT_stack_params(bpy.types.Operator):
     subdivision: IntProperty(name="Subdivisions", default=2, min=0, max=5)
     render_levels: IntProperty(name="Render Levels", default=2, min=0, max=5)
     flag: BoolProperty(name="Enabled", default=True)
+    even_offset: BoolProperty(name="Even Offset")
+    merge: BoolProperty(name="Merge", default=True)
+    constant: BoolProperty(name="Constant Offset", default=True)
+    relative: BoolProperty(name="Relative Offset", default=False)
+    relative_vector: FloatVectorProperty(size=3, default=(1, 0, 0))
+    limit_method: EnumProperty(items=[(x, x.title(), "") for x in ("NONE", "ANGLE", "WEIGHT", "VGROUP")], default="ANGLE")
+    affect: EnumProperty(items=[(x, x.title(), "") for x in ("EDGES", "VERTICES")])
+    edge_weight: StringProperty(default="bevel_weight_edge")
+    vertex_weight: StringProperty(default="bevel_weight_vert")
+    bevel_group: StringProperty(name="Vertex Group")
+    miter_outer: EnumProperty(items=[("MITER_" + x, x.title(), "") for x in ("SHARP", "PATCH", "ARC")])
+    miter_inner: EnumProperty(items=[("MITER_" + x, x.title(), "") for x in ("SHARP", "ARC")])
     axes: BoolVectorProperty(name="Axes", size=3, default=(True, False, False), subtype="XYZ")
     vector: FloatVectorProperty(name="Local Offset", size=3, default=(1, 0, 0), subtype="TRANSLATION", unit="LENGTH")
     axis: EnumProperty(name="Axis", items=AXES, default="Z")
@@ -133,10 +162,30 @@ class HSW_OT_stack_params(bpy.types.Operator):
         else:
             layout.label(text=self.modifier_name)
         for _, ui, label in self._fields():
+            if (ui == "vector" and not self.constant) or (ui == "relative_vector" and not self.relative):
+                continue
+            if ui in {"edge_weight", "vertex_weight"} and (
+                self.limit_method != "WEIGHT" or (ui == "edge_weight") != (self.affect == "EDGES")
+            ):
+                continue
+            if ui == "bevel_group" and self.limit_method != "VGROUP":
+                continue
             if ui == "reference_name":
                 layout.prop_search(self, ui, context.scene, "objects", text=label)
+            elif ui == "bevel_group":
+                layout.prop_search(self, ui, context.object, "vertex_groups", text=label)
+            elif ui in {"edge_weight", "vertex_weight"}:
+                layout.prop_search(self, ui, context.object.data, "attributes", text=label)
             else:
                 layout.prop(self, ui, text=label)
+        if self.modifier_type == "SOLIDIFY":
+            from .dimensions import local_scale_report
+            if local_scale_report(context.object)["nonuniform"]:
+                layout.label(text="Nonuniform world scale: measure thickness along the surface normal.", icon="INFO")
+        if self.modifier_type == "ARRAY" and self.action == "UPDATE":
+            modifier = context.object.modifiers.get(self.modifier_name)
+            if modifier and modifier.type == "ARRAY" and modifier.use_object_offset:
+                layout.label(text="Object Offset also contributes to each step.", icon="INFO")
         if self.action == "ADD" and self.modifier_type == "DATA_TRANSFER":
             layout.prop(self, "transfer_data")
 
@@ -144,15 +193,30 @@ class HSW_OT_stack_params(bpy.types.Operator):
         kind = self.modifier_type
         values = {}
         for rna, ui, _ in self._fields():
+            if self.action == "UPDATE" and not self.properties.is_property_set(ui):
+                continue
             value = getattr(self, ui)
             if ui == "reference_name" and not value:
-                self.report({"ERROR"}, "Choose the required reference object")
-                return {"CANCELLED"}
-            if ui in {"axes", "vector"}:
+                if kind == "MIRROR":
+                    value = None
+                else:
+                    self.report({"ERROR"}, "Choose the required reference object")
+                    return {"CANCELLED"}
+            if ui in {"axes", "vector", "relative_vector"}:
                 value = list(value)
             values[rna] = value
-        if kind == "ARRAY" and self.action == "ADD":
-            values.update(use_constant_offset=True, use_relative_offset=False)
+        if kind == "ARRAY":
+            mod = context.object.modifiers.get(self.modifier_name) if self.action == "UPDATE" else None
+            for switch, vector in (("use_constant_offset", "constant_offset_displace"),
+                                   ("use_relative_offset", "relative_offset_displace")):
+                enabled = values.get(switch, getattr(mod, switch, False))
+                if not enabled and vector in values:
+                    ui = "vector" if vector == "constant_offset_displace" else "relative_vector"
+                    changed = values[vector] != list(getattr(mod, vector)) if mod and mod.type == "ARRAY" else self.properties.is_property_set(ui)
+                    if changed:
+                        self.report({"ERROR"}, f"Enable {switch} before changing {vector}")
+                        return {"CANCELLED"}
+                    del values[vector]
         if kind == "SCREW" and self.action == "ADD":
             values["render_steps"] = values["steps"]
         if kind == "DATA_TRANSFER" and self.action == "ADD":

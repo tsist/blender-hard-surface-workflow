@@ -9,6 +9,7 @@ import bmesh
 import bpy
 
 from . import features, loop_tools, mesh_tools, quad_patch, selection
+from .dimensions import local_scale_report
 
 
 PROVIDERS = (loop_tools, mesh_tools, features, quad_patch)
@@ -203,7 +204,7 @@ def _preflight_growth(bm, tool, settings):
         raise ValueError('Estimated result exceeds the edit budget before mesh allocation')
 
 
-def _initial(bm, selected, protections, marker, allow_expansion):
+def _initial(bm, selected, protections, marker, allow_expansion, cut_faces=None):
     layer = bm.verts.layers.int.new(marker)
     deform = bm.verts.layers.deform.active
     for vertex in bm.verts:
@@ -217,9 +218,12 @@ def _initial(bm, selected, protections, marker, allow_expansion):
             edges.update(tuple(sorted(v[layer] for v in e.verts)) for e in _elements(bm, protected))
         if protected['domain'] == 'FACE':
             faces.update(_cycle(v[layer] for v in f.verts) for f in _elements(bm, protected))
-    fixed = pins | {v for v in bm.verts if v.hide or (not allow_expansion and v not in chosen)}
+    fixed = set(bm.verts) if cut_faces is not None else pins | {
+        v for v in bm.verts if v.hide or (not allow_expansion and v not in chosen)}
     locked = {v[layer]: (tuple(v.co), _weights(v, deform)) for v in fixed}
-    if not allow_expansion:
+    if cut_faces is not None:
+        faces.update(_cycle(v[layer] for v in face.verts) for face in bm.faces if face.index not in cut_faces)
+    elif not allow_expansion:
         # Faces outside the selected vertices must survive with their winding intact.
         for face in bm.faces:
             if all(v not in chosen for v in face.verts):
@@ -249,11 +253,13 @@ def _check_scope(bm, marker, locked, pins, required_edges, required_faces, coord
         sample = [i-1 for i in sorted(missing)[:12]]
         raise ValueError(f'Tool moved or removed {len(missing)} protected or out-of-selection vertices: {sample}')
     if required_edges:
-        found = {tuple(sorted(v[layer] for v in e.verts)) for e in bm.edges}
+        found = {tuple(sorted(v[layer] for v in e.verts)) for e in bm.edges
+                 if all(v[layer] in matched and tuple(v.co) == locked[v[layer]][0] for v in e.verts)}
         if not required_edges <= found:
             raise ValueError('A protected edge was removed')
     if required_faces:
-        found = {_cycle(v[layer] for v in f.verts) for f in bm.faces}
+        found = {_cycle(v[layer] for v in f.verts) for f in bm.faces
+                 if all(v[layer] in matched and tuple(v.co) == locked[v[layer]][0] for v in f.verts)}
         if not required_faces <= found:
             raise ValueError('A protected or out-of-selection face changed connectivity or winding')
 
@@ -279,6 +285,10 @@ def _commit(obj, source, stage, coordinates_only):
     source.update()
 
 
+def converts_strokes(tool, params):
+    return tool == 'looptools.gstretch' and bool(params.get('strokes') or params.get('guide'))
+
+
 def execute(obj, tool, selector, params=None, repeat=1, protect=None, allow_expansion=False):
     """Resolve once, run on a scratch mesh, verify scope, then commit to the original mesh ID."""
     _available(obj)
@@ -288,6 +298,8 @@ def execute(obj, tool, selector, params=None, repeat=1, protect=None, allow_expa
         raise ValueError(f'repeat must be an integer from 1 to {MAX_REPEAT}')
     if tool == 'patch.quad_grid' and repeat != 1:
         raise ValueError('Patch replacement requires one pass; select its new topology before another edit')
+    if tool == 'native.loop_cut_slide' and (repeat != 1 or allow_expansion):
+        raise ValueError('Loop Cut uses one traced face strip per operation')
     if type(allow_expansion) is not bool:
         raise ValueError('allow_expansion must be boolean')
     params = {} if params is None else params
@@ -302,7 +314,7 @@ def execute(obj, tool, selector, params=None, repeat=1, protect=None, allow_expa
         # The maintenance provider validates explicit guide identity, stroke count and confirmation.
         return provider.run(tool, params)
     selected = preview(obj, selector)
-    converting_strokes = tool == 'looptools.gstretch' and not selected['indices'] and bool(params.get('strokes') or params.get('guide'))
+    converting_strokes = not selected['indices'] and converts_strokes(tool, params)
     if selected['domain'] not in spec['domains'] or (not selected['indices'] and not converting_strokes):
         raise ValueError(f"{tool} requires a nonempty selection in {spec['domains']}")
     protections = [preview(obj, s) for s in selectors or []]
@@ -311,6 +323,11 @@ def execute(obj, tool, selector, params=None, repeat=1, protect=None, allow_expa
     if tool == 'native.bevel' and 'affect' not in params:
         effective['affect'] = 'VERTICES' if selected['domain'] == 'VERT' else 'EDGES'
     start = time.perf_counter()
+    dimensions = {}
+    if tool in {'native.circularize', 'looptools.circle', 'form.hole'}:
+        dimensions['radius_space'] = local_scale_report(obj)
+        if dimensions['radius_space']['nonuniform']:
+            dimensions['warning'] = '半径按网格局部单位计算。世界变换含非等比缩放或剪切，请在装配坐标中复测两个方向的孔径。'
     marker = 'hs_id_' + uuid.uuid4().hex
     with _working_mesh(obj) as (source, stage):
         selection.apply(obj, selected)
@@ -319,7 +336,15 @@ def execute(obj, tool, selector, params=None, repeat=1, protect=None, allow_expa
             _protect_attributes(bm, selected, protections)
         start_counts = (len(bm.verts), len(bm.edges), len(bm.faces))
         original_coords = [tuple(v.co) for v in bm.verts]
-        locked, pins, edges, faces = _initial(bm, selected, protections, marker, allow_expansion)
+        cut_faces = None
+        if tool == 'native.loop_cut_slide':
+            from .mesh_precision_tools import loop_cut_scope
+            if len(selected['indices']) != 1:
+                raise ValueError('Choose one seed face for Loop Cut')
+            cut_faces = set(loop_cut_scope(bm, selected['indices'][0], params))
+            if any(p['domain'] == 'FACE' and cut_faces.intersection(p['indices']) for p in protections):
+                raise ValueError('Loop Cut intersects a protected face')
+        locked, pins, edges, faces = _initial(bm, selected, protections, marker, allow_expansion, cut_faces)
         bmesh.update_edit_mesh(stage, loop_triangles=False, destructive=False)
         results = []
         final_hash = selected['topology_sha256']
@@ -332,6 +357,8 @@ def execute(obj, tool, selector, params=None, repeat=1, protect=None, allow_expa
             _preflight_growth(bm, tool, effective)
             if tool in {'edgeflow.set_vertex_curve', 'patch.quad_grid'}:
                 result = provider.run(tool, params, allow_expansion=allow_expansion, protected_indices={i-1 for i in pins})
+            elif provider is mesh_tools:
+                result = provider.run(tool, params, staged=True)
             else:
                 result = provider.run(tool, params)
             if not isinstance(result, dict) or result.get('status') != 'FINISHED':
@@ -341,7 +368,9 @@ def execute(obj, tool, selector, params=None, repeat=1, protect=None, allow_expa
             if len(bm.verts) > MAX_VERTICES or sum(len(f.verts) for f in bm.faces) > MAX_CORNERS:
                 raise ValueError('Result exceeds the edit budget')
             previous_hash, final_hash = final_hash, selection.topology_hash(obj)
-            _check_scope(bm, marker, locked, pins, edges, faces, previous_hash == final_hash)
+            restore_pins = previous_hash == final_hash and tool not in {
+                'align.axis', 'align.reference', 'mesh.snap_symmetry', 'align.plane'}
+            _check_scope(bm, marker, locked, pins, edges, faces, restore_pins)
             bmesh.update_edit_mesh(stage, loop_triangles=False, destructive=False)
         layer = bm.verts.layers.int[marker]
         end_counts = (len(bm.verts), len(bm.edges), len(bm.faces))
@@ -365,4 +394,4 @@ def execute(obj, tool, selector, params=None, repeat=1, protect=None, allow_expa
             'moved_source_vertices':len(moved), 'moved_source_indices_first_512':moved[:512],
             'source_vertices_without_correspondence':len(original_coords)-len(survivors),
             'counts_before':start_counts, 'counts_after':end_counts, 'result_topology_sha256':final_hash,
-            'passes':results, 'elapsed_seconds':time.perf_counter()-start}
+            'passes':results, **dimensions, 'elapsed_seconds':time.perf_counter()-start}

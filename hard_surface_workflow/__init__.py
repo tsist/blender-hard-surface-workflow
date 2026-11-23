@@ -1,14 +1,24 @@
 """Hard Surface Workflow for Blender."""
 
+SUPPORTED_BLENDER = (5, 3, 0)
+
 bl_info = {
     "name": "Hard Surface Workflow", "author": "Blender AI",
-    "version": (0, 3, 1), "blender": (5, 2, 0),
+    "version": (0, 3, 5), "blender": SUPPORTED_BLENDER,
     "location": "View3D > Sidebar > Hard Surface", "category": "Mesh",
 }
 _registered = []
 
 
+def require_supported_blender():
+    import bpy
+
+    if tuple(bpy.app.version) != SUPPORTED_BLENDER:
+        raise RuntimeError("Hard Surface Workflow requires Blender 5.3.0")
+
+
 def register():
+    require_supported_blender()
     from . import core, draw_tools, panel, profiles, recipe_panel, reference_contour, review_grid, seat_tools, shell_tools, stack_panel
     if _registered:
         return

@@ -3,6 +3,7 @@
 from contextlib import contextmanager
 import hashlib
 import json
+import math
 import re
 
 import bmesh
@@ -114,16 +115,21 @@ def _continue_loop(incoming, vertex):
     return opposite[0] if len(opposite) == 1 else None
 
 
-def _edge_loop(seed):
+def _edge_loop(seed, links=None):
     selected = {seed}
     for first_vertex in seed.verts:
         incoming, vertex = seed, first_vertex
         while True:
             _visible(vertex)
             following = _continue_loop(incoming, vertex)
-            if following is None or following in selected:
+            if following is None:
                 break
-            selected.add(_visible(following))
+            _visible(following)
+            if links is not None:
+                links.append((incoming, following))
+            if following in selected:
+                break
+            selected.add(following)
             incoming, vertex = following, following.other_vert(vertex)
     return selected
 
@@ -135,22 +141,27 @@ def _opposite_quad_edge(face, edge):
     return loop.link_loop_next.link_loop_next.edge
 
 
-def _edge_ring(seed):
+def _edge_ring(seed, links=None):
     selected = {seed}
     for initial_face in seed.link_faces:
         incoming, face = seed, initial_face
         while face is not None:
             _visible(face)
             following = _opposite_quad_edge(face, incoming)
-            if following is None or following in selected or len(following.link_faces) > 2:
+            if following is None or len(following.link_faces) > 2:
                 break
-            selected.add(_visible(following))
+            _visible(following)
+            if links is not None:
+                links.append((incoming, following))
+            if following in selected:
+                break
+            selected.add(following)
             incoming = following
             face = next((other for other in following.link_faces if other != face), None)
     return selected
 
 
-def _face_loop(mesh, selector):
+def _face_loop(mesh, selector, links=None):
     if "seeds" in selector:
         if "seed_face" in selector or "direction_edge" in selector:
             raise ValueError("Give either one face direction or a list of face directions")
@@ -159,6 +170,8 @@ def _face_loop(mesh, selector):
         seeds = [{key: selector.get(key) for key in FACE_DIRECTION["required"]}]
     if not isinstance(seeds, (list, tuple)) or not seeds:
         raise ValueError("seeds must contain at least one face direction")
+    if links is not None and len(seeds) != 1:
+        raise ValueError("Sampling requires exactly one topology seed")
     selected = set()
     for item in seeds:
         if not isinstance(item, dict) or set(item) != set(FACE_DIRECTION["required"]):
@@ -173,12 +186,73 @@ def _face_loop(mesh, selector):
             while len(incoming.link_faces) == 2:
                 _visible(incoming)
                 following = next(other for other in incoming.link_faces if other != face)
-                if following in strip or len(following.verts) != 4:
+                if len(following.verts) != 4:
                     break
-                strip.add(_visible(following))
+                _visible(following)
+                if links is not None:
+                    links.append((face, following))
+                if following in strip:
+                    break
+                strip.add(following)
                 incoming, face = _opposite_quad_edge(following, incoming), following
         selected.update(strip)
     return selected
+
+
+def _box(obj, elements, domain, selector):
+    minimum, maximum = selector["minimum"], selector["maximum"]
+    for point in (minimum, maximum):
+        if (not isinstance(point, (list, tuple)) or len(point) != 3
+                or any(type(value) not in (int, float) or (type(value) is float and not math.isfinite(value))
+                       for value in point)):
+            raise ValueError("Box bounds must be finite XYZ triples")
+    if any(low > high for low, high in zip(minimum, maximum)):
+        raise ValueError("Box minimum must not exceed maximum on any axis")
+    space = selector["space"]
+    if space not in ("LOCAL", "WORLD"):
+        raise ValueError("Box space must be LOCAL or WORLD")
+    matrix = obj.matrix_world.copy() if space == "WORLD" else None
+
+    def inside(vertex):
+        coord = matrix @ vertex.co if matrix is not None else vertex.co
+        return not vertex.hide and all(low <= value <= high for low, value, high in zip(minimum, coord, maximum))
+
+    if domain == "VERT":
+        return {vertex for vertex in elements if inside(vertex)}
+    return {element for element in elements if not element.hide and all(inside(vertex) for vertex in element.verts)}
+
+
+def _sample_path(selection, links, sampling):
+    if (not isinstance(sampling, dict) or not {"start", "step"} <= sampling.keys()
+            or set(sampling).difference(("start", "toward", "step", "phase", "limit"))
+            or any(type(value) is not int or value < 0 for value in sampling.values())):
+        raise ValueError("Sampling needs start and step, with optional toward, phase and limit integer fields")
+    start, step = sampling["start"], sampling["step"]
+    toward, phase, limit = sampling.get("toward"), sampling.get("phase", 0), sampling.get("limit")
+    if not 0 <= phase < step or limit == 0:
+        raise ValueError("Sampling requires step >= 1, phase < step and a positive limit when given")
+    neighbors = {element.index: set() for element in selection}
+    for a, b in links:
+        neighbors[a.index].add(b.index)
+        neighbors[b.index].add(a.index)
+    if any(len(adjacent) > 2 for adjacent in neighbors.values()):
+        raise ValueError("Sampling requires an unbranched path")
+    if start not in neighbors:
+        raise ValueError("Sampling start is outside the resolved path")
+    if toward is None and len(neighbors[start]) > 1:
+        raise ValueError("An interior or closed path start requires its adjacent toward index")
+    if toward is not None and toward not in neighbors[start]:
+        raise ValueError("Sampling toward is not adjacent to start along the resolved path")
+    current = start
+    following = toward if toward is not None else next(iter(neighbors[start]), None)
+    path = [start]
+    visited = {start}
+    while following is not None and following not in visited:
+        path.append(following)
+        visited.add(following)
+        current, following = following, next(iter(neighbors[following] - {current}), None)
+    ordered = path[phase:limit:step]
+    return ordered, {"path_length": len(path), "path_start": start, "path_end": path[-1], "closed": following == start}
 
 
 def _vertex_groups(obj, mesh, selector):
@@ -230,6 +304,7 @@ def resolve(obj, selector):
         if "topology_sha256" in selector:
             _check_fingerprint(selector["topology_sha256"], fingerprint)
         elements = getattr(mesh, DOMAINS[domain])
+        links = [] if "sampling" in selector else None
         if kind == "indices":
             indices = selector["indices"]
             if not isinstance(indices, (list, tuple)):
@@ -241,25 +316,37 @@ def resolve(obj, selector):
             selection = {element for element in elements if element.select}
         elif kind == "vertex_group":
             selection = _vertex_groups(obj, mesh, selector)
+        elif kind == "box":
+            selection = _box(obj, elements, domain, selector)
         elif kind == "face_loop":
-            selection = _face_loop(mesh, selector)
+            selection = _face_loop(mesh, selector, links)
         else:
             seeds = _single_or_list(selector, "seed_edge", "seed_edges")
+            if links is not None and len(seeds) != 1:
+                raise ValueError("Sampling requires exactly one topology seed")
             edges = set()
             travel = _edge_ring if kind == "edge_ring" else _edge_loop
             for seed in seeds:
-                edges.update(travel(_edge(mesh, seed)))
-            selection = {v for edge in edges for v in edge.verts} if kind == "vertex_loop" else edges
+                edges.update(travel(_edge(mesh, seed), links if kind != "vertex_loop" else None))
+            if kind == "vertex_loop":
+                selection = {vertex for edge in edges for vertex in edge.verts}
+                if links is not None:
+                    links = [tuple(edge.verts) for edge in edges]
+            else:
+                selection = edges
         indices = sorted(_visible(element).index for element in selection)
         result = {"domain": domain, "indices": indices, "topology_sha256": fingerprint}
-        if kind == "indices":
+        if links is not None:
+            order, result["sampling"] = _sample_path(selection, links, selector["sampling"])
+            result["indices"] = sorted(order)
+        elif kind == "indices":
             order = list(selector["indices"])
         elif kind == "current":
             element_type = {"VERT": bmesh.types.BMVert, "EDGE": bmesh.types.BMEdge, "FACE": bmesh.types.BMFace}[domain]
             order = [el.index for el in mesh.select_history if isinstance(el, element_type) and el in selection]
         else:
             order = indices
-        if order != indices:
+        if order != result["indices"]:
             result["selection_history"] = order
         return result
 

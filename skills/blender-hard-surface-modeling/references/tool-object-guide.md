@@ -1,0 +1,96 @@
+# 硬表面对象工具与原生修改器
+
+适用于 **Hard Surface Workflow 0.3.5 · Blender 5.3.0**。对象工具用于已经定下来的轮廓、构造基准、修改器和装配关系。以稀疏源笼制作跨折面回边、设计控制环、修补不规则曲面时，先走编辑网格工序。每项先写清指定对象、参考件、坐标空间、所量截面和必须保留的形体。 [控制笼工序](mesh-flow.md)
+
+## 从面板或公共 CLI 运行
+
+- 在 **3D 视图 → N → Hard Surface**，**Editable Modifier Stack** 用于选定网格的修改器、可编辑布尔、线阵／径阵／回转，也有 **Extract Selected Faces**。**可编辑工作平面与尺寸刀体** 管平面及尺寸刀体。**Reference Contours** 导入校准轮廓。**Product Surfaces and Fit** 可建承座、执行截面／投线／局部修补配方和检查装配。曲面刀体有独立的 **Surface Path Cutter** 面板。
+- 对象工具的公共路由是 `{"op":"hard_surface.stack","object":"目标对象","tool":"工具ID","params":{...}}`，放入 `model prepare` 的 `operations`。先用 `model flow-tools --tool TOOL_ID` 核对当前字段，再绑定只读源文件及 SHA，查看新候选和 `hard-surface-report.json`。生成结果使用当前视图层和保存的场景状态。GUI 的配方按钮可读取同样参数的 Blender Text，若 Text 包含整条操作，工具与活动对象也须相符。多数写操作以 Object Mode 的本地可编辑对象为目标，原生提取面板可直接读取单对象编辑模式的面选择。 [保存与回退](save-and-rewind.md)
+- 工具传入的世界坐标及局部长度通常是 Blender 单位（BU）。只读几何审计的孔、壁和装配探针使用世界毫米。以实际场景单位换算，并记录对象非均匀缩放和轴向。视口和渲染的修改器开关各自核对。几何过尺寸、连接关系和保护区检查后，再看同机位实剖以及两向条光。 [实际检查方法](geometry-topology-acceptance.md)
+
+## 读外形、建基准、生成母面
+
+| 工具 ID | 何时用与关键配置 | 量测和失败边界 |
+| --- | --- | --- |
+| `reference_contour` | 从一张本地正交参考图提取一个主体的外轮廓。给 `image`、新对象 `name`、六向 `view` 和世界 BU 的 `size=[宽,高]`，一维可为 `null`。`calibration_rect_px` 指定像素标尺框，`center` 配 `anchor` 定位，`flip` 校方向。ROI、种子和背景阈值用于排除干扰。先用 `preview_only` 对照。 | 将轮廓与配准 Image Empty 同视角叠看，量两个独立地标的距离和轴向。核对 `simplify_px` 是否削掉窄缺口及 `bridge_px` 是否把相邻主体并成一个。透视比例、被遮挡轮廓和深度需要其他视图另定。 |
+| `profile_work_plane_create` | 为刀体或构造测点建立正交标架。`mode` 可选 `OBJECT_XY`、`OBJECT_XZ`、`OBJECT_YZ`、`FACE` 或 `DIRECTION_EDGE`。`FACE` 用源面绕向和一条边定轴，方向边模式以边中点为基准、边方向为 U，可显式给相邻 `face_index` 决定法向。`offset=[U,V,N]`、`flip` 和 `size` 分别调落点、朝向及显示平面大小。 | 核原点、U/V/N 和法向箭头，确认相邻折面有两条法向候选时选对面。变更源笼后重查 `face_index`、`edge_index`。工作平面须保持可用的正交标架，创建刀体前检查平面未被缩放、镜像或剪切。 |
+| `profile_work_plane_inspect` | 用工作平面 `name` 读取现有平面矩阵、方向、网格和引用刀体，适合交接和重绑前复查。 | 以实际矩阵核方向与标尺，用签名、手改标记及所存尺寸分辨平面变换改动和网格改动。看见反向、缩放或手动挪动时，先同设计锚点比对，再决定是否重新建立。 |
+| `profile_work_plane_update` | 以当前目标重新定既有 `name` 的工作平面。仅改需要的 `mode`、索引、偏移、翻转或大小。接受手改变换覆盖时才用 `allow_user_transform`，明确重建手改网格时才用 `allow_user_edit`。 | 核原点和角点，读 `mesh_replaced`、手改标记及引用刀体名单。已有刀体保有独立姿态。变更工作平面后，逐个查看依赖刀体实际位置和切孔，尤其是换目标面及法向翻转。 |
+| `section_surface` | 用具名截面搭可继续编辑的四边面源笼。给独立 `name`、有序 `landmarks` 和 `sections=[{name,points}]`，每站沿同一绕向按一列一个世界 XYZ 点填写。`closed` 接首尾列，闭环无需重复首点。`flip_normals` 选择面朝向。 | 核每站顶点与具名列的索引、切面、两端截口及过渡条光。截面间错相位可能扭曲，需实际检查。原位更新要求当前 `expected_signature`、同站名／列名和结构，检测到手调、改名或改变采样布局时另建候选。 |
+| `surface_project_path` | 在已经成形的求值母面上标一条参考路径。给 `name`、有序世界 `points`、`max_distance`，且只给一种 `direction`、逐点 `directions` 或 `radial={origin,axis,sense}`。径向 `sense` 取 `INWARD` 或 `OUTWARD`。`samples_per_span`、`max_jump`、`closed` 控制采样及跨段跳跃。 | 在斜视和截面核射线第一命中的是所需皮层。比较 `hit_distance_min/max` 和极点、折肩处的相邻命中。漏靶、径向采样落在轴上、相反的逐站方向和超长跳变会拒绝。输出为独立 3D POLY 路径。原位更新绑定当前签名、目标和点数，源面需要另行构造开口或切线。 |
+
+曲壳需要多个真实截面和共同角点时，从前、侧或横截先配好相同站位。工作平面用实际面／边建立正交基准，参考图保留校准变换。先验证剖面与分件再定孔与起厚。 [复杂曲面规划](complex-surface-plan.md) · 5.3.0 投影和装配回执
+
+## 造可换刀体、设布尔并复查切口
+
+| 工具 ID | 何时用与关键配置 | 量测和失败边界 |
+| --- | --- | --- |
+| `profile_dimension_create` | 在已有 `work_plane` 或自动 `plane_mode` 上建立独立 `name` 刀体。给 `shape` 和法向 `depth`。`LINE` 用 `start/end/line_width`，`ARC` 用 `radius/start_angle/end_angle/arc_width`，`CIRCLE` 用 `radius`，`ROUND_SLOT` 用含圆头的 `length` 和 `width`，`POLYGON` 用简单 UV `points`。圆弧角用弧度。有独立实例需求可用 `clone_from`。 | 固定工作平面 U/V 与刀体深度，量圆直径、槽总长和槽宽、刀身实际越过前后皮的余量。现有平面不能与自动平面参数混用。圆端槽长度小于宽度、退化或自交轮廓需先修截面。圆或弧由离散段构成，以世界实际净径复测。 |
+| `profile_dimension_inspect` | 以刀体 `name` 读尺寸定义、当前网格、签名、共享用户和消费者。切孔改纸面尺寸或替换刀体前使用。 | 对照 `dimensions_valid`、`user_edited`、`measured_bounds`、体积、面绕向、对象变换和 Boolean 消费者。手改后用实际网格重测，旧标称尺寸仅能作为追溯依据。 |
+| `profile_dimension_resize` | 保持刀体对象及姿态，原位调整同一形状的一个或多个尺寸。以 `expected_signature` 锁定本次读到的刀体。默认 `REFUSE`。有手改时可考虑 `COPY` 留存现件，获准丢弃手改才用 `REPLACE`。涉及共享数据时明确 `unlink_shared` 或先选独立工作副本。 | 复测切孔前后截面、源物体和所有消费者。`COPY` 处理检测到的手改，产生新刀体后应按意图单独换绑。拒绝过期签名、原位改形状和未授权解除共享。世界缩放仍需用实剖核对。 |
+| `surface_path_cutter` | 把单条闭合 3D POLY 轮廓沿固定世界 `direction` 投成闭合棱柱。给 `curve/name/direction/margin`，`margin` 是穿过目标求值整体两端后各加的世界 BU。默认 `operation="CUTTER"`；目标是闭合正体积时可选择 `DIFFERENCE` 加实时 Exact 布尔。重算时显式 `update=true`。 | 核投影轮廓无自交，量实际刀深、移除体积及穿过哪一层。漏切或体积未减会拒绝。改变轮廓需重新更新刀体。手改、共享、其他消费者、现有受管布尔改动或其后有依赖栈时应留原刀并开新候选。 |
+| `boolean_consumers` | 以活动刀体为对象、`params={}`，列出有该刀体的对象级和集合级 Boolean 消费者。改刀、换绑和分离共用刀之前先读。 | 核对每行的对象、修改器名、索引和操作数类型，再核装配中哪些件确实要动。非 Boolean 用途和节点内部依赖应另查。 |
+| `boolean_batch` | 用一个刀体给一组明确的零件加实时 Exact Boolean。给 `name/cutter/operation`，操作取 `DIFFERENCE/UNION/INTERSECT`。省略 `targets` 只处理声明主对象，显式目标必须含主对象且互异。 | 逐件查看新增层的位置，剖验孔口是否穿通或是否留底，查应保护的壁厚和未参与零件。重名、循环引用和超求值预算会拒绝。共面薄壁、开放片和微小余量要用实际体积、孔径与实剖判断。 |
+| `boolean_rebind` | 对同一个原生对象布尔层换刀。给 `name`、新 `cutter`、旧 `expected_cutter`，可加从 0 起的 `expected_index`。适合保留栈位置、层身份和同刀其他用户。 | 复比该层和新刀的消费者，确认其余层的次序、求值和位置不变。拒绝陈旧旧刀或层索引、集合操作数及引用循环。换到更深的刀时复测薄壁穿插和装配止口。 |
+| `boolean_slice` | 从同一源求一份 Difference 和一份 Intersect，以独立网格副本分别承接。给 `cutter` 与两个不重复的新名 `difference_name/intersection_name`，必要时指定 `collection` 和布尔层 `name`。 | 分别独显两支，闭合实体可比体积及互补截线，并确认原件仍可用。同一实时刀体可同步改变两个结果。输入开放、相切或两支截线侧滑时，先查求值几何再使用结果。 |
+
+刀体优先用于已定基准的平面孔、倒角预留和同一接口的重复改型。斜交曲壳可在副本求相贯位置，然后用显式接收边组织真实面带。 [切割与重建实例](topology-modifier-casework.md) · 曲面描线刀体实证
+
+## 分件、承座与已应用几何的局部返修
+
+| 工具 ID | 何时用与关键配置 | 量测和失败边界 |
+| --- | --- | --- |
+| `shell_extract` | 从控制笼复制明确归属的一片壳面。给新 `name`，`selector` 用显式 `FACE` 索引和 `topology_sha256`，面板也可从编辑模式的当前选面读入。`collection` 可单独指定输出。 | 原位比较新件轮廓、选到的源面、材质槽、UV 和顶点组。源皮保留。新件通常是开放皮片，需要另行建壁和缝。工具读取源笼，拒绝形态键和自定义法线的输入，已有修改器效果要单独安排。 |
+| `shell_panel_seat` | 从同一开放母面建凸口盖和固定承座。母面须是应用尺度、无折叠的局部 +Z 高度场，面片全在周界内。给显式面 `selector`、新 `cover/base`、`gap`、`cover_thickness`、`seat_depth`、`ledge_width`、`floor_drop`、`base_thickness`。 | 在盖中、短边和转角实剖量外缝、盖底、承台搭接与底部余量。要求 `ledge_width>gap`、`seat_depth>=cover_thickness`，并且退让后仍有可用轮廓。折叠、陡壁、非凸口或触到母面外边时分段重做真实返边。原始母面是参考，可独显，验合时只查盖和座。 |
+| `shell_panel_seat_resize` | 在同一受管装配和未变母面上改参数。保留 `cover/base` 名称，只传实际要改的一项或多项尺寸。 | 按同一装配姿态前后比较口边、盖底、承座净空和邻件，同时验退出方向。母面签名、两件记录不一致、零件几何被手改或网格共享时，先保存现件，重用母面开新组合。 |
+| `fillet_strip_refit` | 已应用圆角需要重定宽度且保留段数。用当前 `topology_sha256`、`width` 和 `sections=[{arc:[跨圆角弧的有序点],outer:[两侧毗邻支撑点]}]`。直线条带至少两站；闭合圆孔口沿加局部 `circular_axis={origin,direction}`，至少六个站，板面侧在前，闭环首站只记一次。可填 `protected_vertices`。 | `width` 是虚拟尖角到切点在支撑面上的退距。截面分别量两侧切点、弧半径与相邻面；圆孔验同轴、真实净径及孔壁位置。支撑边跨越、参考弧不满足形状、宽度影响保护点或邻面翻转时拒绝。 |
+| `boolean_seam_cleanup` | 已应用布尔只余一条成对的短相贯接缝时，明确哪一侧应留。给 `topology_sha256`、有序 `pairs=[[keep,remove],...]`、局部 `max_distance`，必要时给 `protected_vertices`。每对必须是真实双面共边，两侧各连续。 | 比对保留点坐标、面绕向、未压缩边、结果索引映射及接缝实剖。工具会拒绝 UV／自定义网格属性、移除有权重点、标记／隐藏边、非流形与错接结果。长边和非成对分叉须先手工重建连接。 |
+
+返修目标是恢复装配需要的实际形体。闭合、边数和无穿插分别复查，细分后的口沿或暗缝还需同机位观察。 座与盖的组合试件 · [实际产品上按段返边的案例](real-product-studies.md)
+
+## 重复、回转与修改器交接
+
+| 工具 ID | 何时用与关键配置 | 量测和失败边界 |
+| --- | --- | --- |
+| `array_linear` | 给一段可复用源坯建立实时经典 Array。指定 `name`、`count`（含原件）和局部三轴 `offset`。需要相邻单元焊接时才传 `merge_threshold`。 | 冷开量同名站相邻实际步距、首尾包络、预期焊边及最窄的应保缝。局部步距经过对象变换才是世界尺寸。叠放上游变形或其他偏移后的阵列，要看求值件。 |
+| `array_radial` | 以一个可编辑扇区做径阵。指定 `name/count/axis/pivot`（枢轴为局部坐标），可指定 `angle`（弧度）、辅助对象名和集合。创建时为 Object Offset 的 Empty 写 `angle/count`。 | 改 `count` 时同步重设 Empty 步距，并实测零站、首末站、段间及闭环首末缝。48→36 的试件只改数量会留下约 97.5° 的尾缺口，同步改为 10° 后合圆。部分角按 `angle/count` 分布；确需最后一份恰到端点时，先按所需单步和份数校准。检查轴、缩放和焊接阈值。|
+| `revolve` | 编辑一个截面，让原生 Screw 实时绕网格对象的局部 `axis` 回转。给 `name`、`steps`，必要时传弧度 `angle`、每转轴向位移 `screw_offset` 和 `merge_threshold`。 | 实剖盘面半径、轴向升距、内外绕序、起终端和封合。截面离轴端口、圈间焊缝和螺纹收尾需分别检查。查询渲染与视口步数，截面叠乘超预算时减低密度或分开端部。 |
+| `stack_snapshot` | 绑定网格后用空参数读原生栈、可见性和支持字段。为定位栈索引、比前后差异和构造 `expected_order` 使用。 | 读名称、类型、顺序、视口／渲染旗标、对象引用及实参数。它是栈状态证据，需按输入、单层和全栈另外观察真实几何。 |
+| `stack_add` | 追加原生层，明确 `name/type/settings`。用 `model flow-tools --tool stack_add` 读 RNA 字段及类型，再按实际意图选作用域、引用与顺序。 | 比较真实增层、活动通道和上游输入。拒绝不支持字段、重名、循环引用和预算超限。布尔新增要求对象刀体。 |
+| `stack_update` | 原位改已有层的 `settings`，传 `name`，必要时锁 `expected_type/expected_index`。现有对象布尔换刀用 `boolean_rebind`。 | 对照修改器原位、变化字段以及实际几何，读未动字段与邻件。启用不同限制方式时检查原网格或上游求值提供所需属性。陈旧类型／索引或非法字段须重新阅读当前栈。 |
+| `stack_toggle` | 用 `name` 指定层，明确给 `viewport`、`render` 或两者，支持 `expected_type/expected_index`。适用逐层定位首次失效和低成本预览。 | 分别读实际视口和渲染结果；必要时冻结固定机位。打开会触发对应通道预算检查。视口关掉一层以后，渲染通道仍可能执行该层。 |
+| `stack_reorder` | 指定 `name/index` 调一层，或给含每层恰一次的完整 `order`。响应旧记录时附 `expected_order`。 | 同截面核首个失效处、穿插、焊接、法线和未动的依赖。拒绝过期顺序、缺层或超预算的求值。布尔、倒角、镜像、焊接、细分调序会改变输入与拓扑。 |
+
+**Editable Modifier Stack** 的快捷入口是 Add Modifier、每层编辑按钮、视口和渲染开关、上下移动。Boolean 有独立的添加、分支切片、查消费者和单层换刀。工具校验可读的 Object／Collection 引用、约束和对象驱动循环，视口与渲染分别计算 2,000,000 个估算工作单位的上限。节点内部依赖、实际内存峰值和下游导出应以项目实际求值核对。 [基础修改器实剖](modifier-basics.md) · [跨对象和组合修改器实证](modifier-composition-studies.md)
+
+### 原生类型的快捷字段与几何复核
+
+面板字段是常用入口。公共 `stack_add/stack_update` 开放的范围以当前 RNA 白名单为准。面板角度随 Blender 设置显示，JSON 角度字段用弧度；距离根据字段约定使用对象坐标。以下每层先比较输入与输出，再查实际保存全栈。
+
+| 类型 | 关键设置及验收边界 |
+| --- | --- |
+| `BOOLEAN` | 从独立 Boolean 区域选对象刀与差、并或交。面板配方用 Exact。逐剖查目标侧、实际开口和底部，查相切、共面、非闭合输入及体积异常。 |
+| `BEVEL` | 面板可设宽度、段数、点／边、限制方式、权名、组及内外斜接。按 `WEIGHT` 时点权为 POINT 域 Float，边权为 EDGE 域 Float；后置层也可能读取上游生成的属性。`VGROUP` 用现有顶点组。测真实退距和圆角截面，窄处的 Clamp 可能缩小相邻或同次倒角。分别核主棱、次棱和凹凸角。 |
+| `SOLIDIFY` | 快捷设置有厚度、Offset、Even Offset。CLI 还可查受支持的 Rim、复杂模式、厚度组等属性。看内／外哪一侧移动，量最窄处实际世界法向厚度；非均匀缩放、急转或窄口容易薄厚不均及起厚穿插。 |
+| `MIRROR` | 核本地轴、剪裁、参考镜面对象、合并开关和阈值。需要截半时再配置 `use_bisect_axis` 与翻转侧。中缝查真实共边、件数和法向，阈值过大会吞细缝，过小则保留重边。 |
+| `SUBSURF` | 面板分别控制视口、渲染等级。根据现有工序在 Simple 和 Catmull–Clark 中选用对应类型。对照 L0、L1、L2 的轮廓、条光及面数，开放回边和折痕还要分别验。 |
+| `ARRAY` | 经典原生层的常量、相对和对象偏移可以参与同一步。改向量前启用对应模式，相对量取上游求值包围盒。CLI 可配参考曲线和端盖等白名单属性。闭环对象偏移要同时核相邻合并与 `use_merge_vertices_cap` 首尾合并。W975 只切该开关，求值开边由 118 降至仅两个端圈的 48。检查份数、真实步距与应保缝。|
+| `SCREW` | 快捷设置轴、角和步数，新增时同步渲染步。CLI 可声明独立渲染步、偏移、轴参考对象及焊接。量整转轴向升距、截面圆径及跨圈接缝。开剖面起终端需要单独成形。冲击钻试件的三点开剖面旋转两圈，`25 mm` 节距对应 `50 mm` 轴向增量，同时留下 68 条开边。|
+| `WELD` | 按局部 `merge_threshold` 选 All 或 Connected，也可按字段限定顶点组。对照合并前后的连通域和未焊邻缝，确认没有把两个独立装配件的邻边误合。 |
+| `WEIGHTED_NORMAL` | 快捷设 Weight 与 Keep Sharp。CLI 可用模式、阈值、组与面强度限定。看实际面角法线和掠射光，真实相交、短边和差的面流先修网格。 |
+| `SHRINKWRAP` | 选目标表面和偏移，根据接口用投影或近点，并按组限制区域。查轴、正负方向、剔除、投射距离和修改器顺序。量受控冠面、孔唇和保护组，射线朝错会贴到对侧，整件贴合可能压平槽与内壁。 |
+| `LATTICE` | 绑定具名晶格和 Strength，按需要配置组。先量静置笼与真实变形的固定基准，检查晶格覆盖及对象姿态。超边界处和孔位保护组分别实测。 |
+| `SIMPLE_DEFORM` | 设置 Bend/Twist/Taper/Stretch、轴和 Factor。旋转类按弧度，CLI 的 `factor` 和 `angle` 只填一个。用原点、限制范围和组固定变形区。实剖看弯曲轴、半径、出入口和未变段，留意偏置原点与非均匀比例。 |
+| `CURVE` | 指定 Curve 对象和带正负方向的变形轴。核网格与曲线的原点、方向和端部。看沿线间距、截面扭转及源件收缩，刚性复制件可考虑单独安排约束或阵列。 |
+| `DECIMATE` | COLLAPSE 读 Ratio，DISSOLVE 读角度限制及分隔属性，UNSUBDIV 读迭代。保持原源笼和评审机位，逐层测减面收益、轮廓、材质分界和细分结果。受保护的形体要以实际误差验证。 |
+| `TRIANGULATE` | 用四边面和 N 边面的分割方式、最小顶点数控制对角线。核长薄面实际三角向、法线与后续贴图／导出。弯折四边面在换对角后需重看高光和实剖。 |
+| `DATA_TRANSFER` | 快捷入口指定源 Mesh、混合系数和数据类，新增时用 `TOPOLOGY` 映射配 `REPLACE`。可选权重、UV、自定义法线或锐边。异拓扑需明示实际映射、距离和分组。逐域检查接收层、外皮和翻边，拒绝把局部逼近当作同索引拓扑。 |
+
+修改器顺序先用同一工程逐层复开。具名权重、Arc 斜接、阵列输入边界和传递域等都有能打开的实证。 [进阶修改器实证](modifier-advanced-studies.md) · [堆叠后布线与剖面](topology-modifier-casework.md)
+
+## 区分净空、表面交叉、包容与运动
+
+1. **严格交叉与共面重叠分开收。** 在 **Product Surfaces and Fit → Inspect Geometry and Fit → Crossings between two meshes** 选两件读当前求值层。批量用 `model inspect --geometry-audit` 指定 `pairs`，按需同时核 `SOURCE` 与 `EVALUATED`。以 `strict_hits` 看三角面内部的横穿，以 `coplanar.overlapping_pairs` 看共面正面积重叠。合法贴合面也可能出现在后者。预算不足读 `unverified` 或已发现的下界，再缩小范围查关键剖面。 [几何与装配验收](geometry-topology-acceptance.md)
+2. **包容和定向间隙要量占据区间。** 某件能完全处在另一闭壳内部而两张表面没有横穿。对闭合、绕向一致的件，在共同装配基准沿轴向和关键剖面加成对的世界毫米探针，对照材料区间及其重叠或间距，必要时补剖切和内部见证点。开放壳、擦边和奇数交点时读未验原因，再根据板皮／实体的真实定义判读。单条探针的间距只对应这条线。
+3. **孔与壁量真实表面。** BORE 用孔内种子、世界轴向、站位、轴向窗口和净通半径。报告给各站的拟合中心、采样净径与轴向探针是否堵塞。WALL 从靠近壁面的种子找最近明确三角面，沿其世界法向向内量材料厚度。折角法向多解、开放件或旁近多层时优先选择明确测点并补实剖。 [厚度与起厚对照](modifier-basics.md)
+4. **运动另约姿态和路线。** 在实际装配原点冻结两件，按真实轴和行程逐姿态求值，至少检查端点、最窄站位、曲率或运动方向变化处，出问题细化附近步距。对要求连续无碰撞的交付，留实际扫掠或等效连续几何证据。静态过关只证明所测姿态和所选表示层。 [真实产品装配复查](real-product-studies.md) · [专项检测规范](geometry-topology-acceptance.md)

@@ -14,6 +14,15 @@ FACE_DIRECTION = {
     "type": "object", "additionalProperties": False, "required": ["seed_face", "direction_edge"],
     "properties": {"seed_face": INDEX, "direction_edge": EDGE_SEED},
 }
+LOOP_KINDS = ("edge_loop", "edge_ring", "vertex_loop", "face_loop")
+SAMPLING = {
+    "type": "object", "additionalProperties": False, "required": ["start", "step"],
+    "properties": {
+        "start": INDEX, "toward": INDEX, "step": {"type": "integer", "minimum": 1},
+        "phase": INDEX, "limit": {"type": "integer", "minimum": 1},
+    },
+}
+POINT = {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}
 
 
 def _selector_shape(kind, fields, required=(), alternatives=()):
@@ -41,11 +50,13 @@ _SELECTORS = {
     "indices": _selector_shape("indices", {"indices": {"type": "array", "items": INDEX, "uniqueItems": True}},
                                required=("domain", "indices")),
     "current": _selector_shape("current", {}, required=("domain",)),
-    **{kind: _selector_shape(kind, _SEED_FIELDS, alternatives=(("seed_edge",), ("seed_edges",)))
+    "box": _selector_shape("box", {"space": {"enum": ["LOCAL", "WORLD"]}, "minimum": POINT, "maximum": POINT},
+                           required=("domain", "space", "minimum", "maximum")),
+    **{kind: _selector_shape(kind, {**_SEED_FIELDS, "sampling": SAMPLING}, alternatives=(("seed_edge",), ("seed_edges",)))
        for kind in ("edge_loop", "edge_ring", "vertex_loop")},
     "face_loop": _selector_shape(
         "face_loop", {**FACE_DIRECTION["properties"],
-                      "seeds": {"type": "array", "items": FACE_DIRECTION, "minItems": 1}},
+                      "seeds": {"type": "array", "items": FACE_DIRECTION, "minItems": 1}, "sampling": SAMPLING},
         alternatives=(("seed_face", "direction_edge"), ("seeds",)),
     ),
     "vertex_group": _selector_shape(

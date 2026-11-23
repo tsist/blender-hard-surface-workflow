@@ -8,6 +8,7 @@ import bmesh
 import bpy
 
 from . import settings as state
+from ..selector_spec import DOMAINS, LOOP_KINDS, SELECT_MODES, TYPE_DOMAIN
 
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
@@ -201,10 +202,10 @@ def _active_element(obj, element_type):
     bm.faces.index_update()
     history = getattr(bm, "select_history", None)
     active = getattr(history, "active", None) if history is not None else None
-    if isinstance(active, element_type) and getattr(active, "is_valid", False):
+    if isinstance(active, element_type) and active.is_valid and active.select and not active.hide:
         return active.index
     sequence = bm.edges if element_type is bmesh.types.BMEdge else bm.faces
-    selected = [element for element in sequence if element.select]
+    selected = [element for element in sequence if element.select and not element.hide]
     if len(selected) == 1:
         return selected[0].index
     return None
@@ -298,15 +299,14 @@ def _current_domain(context, settings):
         select_mode = context.tool_settings.mesh_select_mode
     except Exception:
         select_mode = (True, False, False)
-    if len(select_mode) >= 3 and select_mode[2]:
-        return "FACE"
-    if len(select_mode) >= 2 and select_mode[1]:
-        return "EDGE"
-    return "VERT"
+    domains = [name for name, enabled in zip(state.DOMAINS, select_mode) if enabled]
+    if len(domains) != 1:
+        raise ValueError("请选择一个编辑域（顶点、边或面），或在面板明确指定域。")
+    return domains[0]
 
 
-def _build_selector(context, settings, obj):
-    source = getattr(settings, "selector_source", "current")
+def _build_selector(context, settings, obj, source=None):
+    source = source or getattr(settings, "selector_source", "current")
     if source == "current":
         return {"kind": "current", "domain": _current_domain(context, settings)}
     if source == "indices":
@@ -315,6 +315,9 @@ def _build_selector(context, settings, obj):
             "domain": getattr(settings, "indices_domain", "EDGE"),
             "indices": _parse_indices(settings.explicit_indices),
         }
+    if source == "box":
+        return {"kind": "box", "domain": settings.box_domain, "space": settings.box_space,
+                "minimum": list(settings.box_minimum), "maximum": list(settings.box_maximum)}
     if source in ("edge_loop", "edge_ring", "vertex_loop"):
         seed = _parse_edge_seed(settings.seed_edge, "种子边")
         if seed is None:
@@ -324,8 +327,8 @@ def _build_selector(context, settings, obj):
                     "没有活动边：请在 Edit 模式点选一条边，或在面板填写种子边索引。"
                 )
             seed = active
-        return {"kind": source, "seed_edge": seed}
-    if source == "face_loop":
+        selector = {"kind": source, "seed_edge": seed}
+    elif source == "face_loop":
         direction = _parse_edge_seed(settings.direction_edge, "方向边")
         if direction is None:
             raise ValueError("面循环必须填写显式方向边索引。")
@@ -336,12 +339,19 @@ def _build_selector(context, settings, obj):
                 raise ValueError(
                     "没有活动面：请在 Edit 模式点选一个四边面，或填写种子面索引。"
                 )
-        return {
-            "kind": "face_loop",
-            "seed_face": seed_face,
-            "direction_edge": direction,
-        }
-    raise ValueError("未知选区来源：{!r}".format(source))
+        selector = {"kind": source, "seed_face": seed_face, "direction_edge": direction}
+    else:
+        raise ValueError("未知选区来源：{!r}".format(source))
+    if getattr(settings, "sample_path", False):
+        if settings.sample_start < 0:
+            raise ValueError("请填写取样起点索引，或在目标域点选起点与相邻下一站后读取。")
+        sampling = {"start": settings.sample_start, "step": settings.sample_step, "phase": settings.sample_phase}
+        if settings.sample_toward >= 0:
+            sampling["toward"] = settings.sample_toward
+        if settings.sample_limit:
+            sampling["limit"] = settings.sample_limit
+        selector["sampling"] = sampling
+    return selector
 
 
 def _validate_resolved(resolved):
@@ -359,6 +369,8 @@ def _validate_resolved(resolved):
     }
     if "selection_history" in resolved:
         result["selection_history"] = list(resolved["selection_history"])
+    if "sampling" in resolved:
+        result["sampling"] = resolved["sampling"]
     return result
 
 
@@ -432,7 +444,15 @@ def _locked_selection(context, core, obj, settings):
             )
         explicit = state.explicit_selector(cached)
         try:
+            source = json.loads(settings.preview_source or "{}")
+            if not isinstance(source, dict):
+                raise ValueError("选区来源缓存损坏")
+            recheck_source = source.get("kind") == "box" or "sampling" in source
             _validate_resolved(core.preview(obj, explicit))
+            if recheck_source:
+                fresh = _validate_resolved(core.preview(obj, source))
+                if state.explicit_selector(fresh) != explicit:
+                    raise ValueError("坐标范围或路径取样的结果已变化")
         except Exception as exc:
             state.invalidate_preview(settings, None, require_preview=True)
             raise ValueError(
@@ -448,7 +468,7 @@ def _locked_selection(context, core, obj, settings):
             raise ValueError(
                 "无法恢复已预览的选区，已取消执行；请重新预览选区。"
             ) from exc
-        checked = _store_preview_for_object(settings, applied, explicit, obj)
+        checked = _store_preview_for_object(settings, applied, source if recheck_source else explicit, obj)
         if not _preview_identity_matches(settings, obj):
             state.invalidate_preview(settings, None, require_preview=True)
             raise ValueError(
@@ -539,6 +559,27 @@ def _text_error(value):
 
 
 def _result_message(result, fallback):
+    if isinstance(result, dict) and result.get("passes"):
+        last = result["passes"][-1]
+        if last.get("clear_diameters_local"):
+            sizes = last["clear_diameters_local"]
+            return f"孔心基准 {last['center_mode']}，成孔净通径 {min(sizes):.6g} 至 {max(sizes):.6g}（局部单位）。"
+        if "source_vertex_pairs" in last:
+            pairs = last["source_vertex_pairs"]
+            if pairs:
+                sample = "，".join(f"{a}→{b}" for a, b in pairs[:8])
+                return f"桥接已验证 {len(pairs)} 对原边界顶点。配对 {sample}。"
+            return "桥接完成；该输入的角点配对需从新边流复查。"
+        if "unmatched_indices" in last and "ambiguous_indices" in last:
+            return (f"对称匹配 {last['matched_vertices']} 点，未配对 {len(last['unmatched_indices'])} 点，"
+                    f"对应不唯一 {len(last['ambiguous_indices'])} 点。")
+        if "source_faces" in last and "factor" in last:
+            return f"定向环切经过 {len(last['source_faces'])} 面，滑动比例 {last['factor']:.4g}。"
+    if isinstance(result, dict) and result.get("tool") == "form.recess" and result.get("passes"):
+        last = result["passes"][-1]
+        if all(key in last for key in ("requested_depth", "measured_depth_min", "measured_depth_max")):
+            return ("沉台末次请求深度 {requested_depth:.6g}，内盘实测 "
+                    "{measured_depth_min:.6g} 至 {measured_depth_max:.6g}（局部单位）。").format(**last)
     for key in ("message", "summary", "detail"):
         value = result.get(key) if isinstance(result, dict) else None
         if isinstance(value, str) and value.strip():
@@ -547,6 +588,10 @@ def _result_message(result, fallback):
 
 
 def _result_warning(result):
+    if isinstance(result, dict) and result.get("tool") == "vertex.connect":
+        count = sum(row.get("wire_edges_across_faces", 0) for row in result.get("passes", []))
+        if count:
+            return f"已在已有面上建了 {count} 条独立边，原面完整。切开原面可用 J 或 K。"
     for key in ("warning", "warnings"):
         value = result.get(key) if isinstance(result, dict) else None
         if value not in (None, "", False, [], {}):
@@ -712,9 +757,10 @@ class HSW_OT_exit_edit(bpy.types.Operator):
 
 class HSW_OT_preview_selection(bpy.types.Operator):
     bl_idname = "hard_surface.preview_selection"
-    bl_label = "预览选区"
+    bl_label = "硬表面：预览并高亮选区"
     bl_description = "解析当前选区来源，真实选中并高亮范围"
-    bl_options = {"REGISTER"}
+    bl_options = {"REGISTER", "UNDO"}
+    source: bpy.props.StringProperty(options={"HIDDEN", "SKIP_SAVE"})
 
     @classmethod
     def poll(cls, context):
@@ -728,21 +774,31 @@ class HSW_OT_preview_selection(bpy.types.Operator):
         try:
             core = _core()
             target = _target_object(context, settings)
+            if self.source and target != context.active_object:
+                raise ValueError("快捷选取要求活动网格与面板目标一致。")
             _store_object_context(settings, context, target)
             _ensure_edit_target(context, target)
-            selector = _build_selector(context, settings, target)
+            selector = _build_selector(context, settings, target, self.source)
             resolved = _preview_then_select(context, core, target, selector)
+            if self.source and settings.selector_source != self.source:
+                settings.selector_source = self.source
             stored = _store_preview_for_object(settings, resolved, selector, target)
             count = len(stored["indices"])
             if count:
                 message = "已选出 {}。".format(_selection_phrase(stored))
+                if "sampling" in resolved:
+                    path = resolved["sampling"]
+                    shape = "闭环" if path["closed"] else "开链"
+                    message += f" {shape} {path['path_length']} 站，{path['path_start']} → {path['path_end']}。"
                 kind = "SUCCESS"
             else:
-                message = "选区为空；执行前请调整选区来源。"
-                kind = "WARNING"
+                guided = settings.tool == "looptools.gstretch" and core.converts_strokes(
+                    settings.tool, state.collect_params(settings, settings.tool))
+                message = "已确认空选区，执行将从指定描线生成边链。" if guided else "选区为空，请调整选区或提供 GStretch 描线。"
+                kind = "SUCCESS" if guided else "WARNING"
             _set_status(settings, message, kind)
             _redraw(context)
-            self.report({"INFO" if count else "WARNING"}, message)
+            self.report({"INFO" if kind == "SUCCESS" else "WARNING"}, message)
             return {"FINISHED"}
         except (ValueError, RuntimeError) as exc:
             state.invalidate_preview(settings, None, require_preview=True)
@@ -755,6 +811,41 @@ class HSW_OT_preview_selection(bpy.types.Operator):
                 self, settings, context,
                 "选区预览失败：{}: {}".format(type(exc).__name__, exc),
             )
+            return {"CANCELLED"}
+
+
+class HSW_OT_pick_path_direction(bpy.types.Operator):
+    bl_idname = "hard_surface.pick_path_direction"
+    bl_label = "硬表面：读取路径起点与下一站"
+    bl_description = "在目标域依次点选起点和下一站，再读取两者的真实索引"
+    bl_options = {"UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        settings = _settings(context)
+        return (context.mode == "EDIT_MESH" and len(context.objects_in_mode) == 1
+                and settings is not None and settings.selector_source in LOOP_KINDS)
+
+    def execute(self, context):
+        settings = _settings(context)
+        try:
+            obj = _target_object(context, settings)
+            domain = TYPE_DOMAIN[settings.selector_source]
+            if obj != context.active_object or tuple(context.tool_settings.mesh_select_mode) != SELECT_MODES[domain]:
+                raise ValueError("请在目标活动网格中切换到该路径的单一选取域。")
+            mesh = bmesh.from_edit_mesh(obj.data)
+            elements = getattr(mesh, DOMAINS[domain])
+            elements.index_update()
+            picked = {item for item in elements if item.select and not item.hide}
+            ordered = [item.index for item in mesh.select_history if item in picked]
+            if not 1 <= len(picked) <= 2 or len(ordered) != len(picked):
+                raise ValueError("请先清除选择，再用鼠标依次点选一个端点，或起点与相邻的下一站。")
+            settings.sample_start = ordered[0]
+            settings.sample_toward = ordered[1] if len(ordered) == 2 else -1
+            self.report({"INFO"}, f"已读取路径索引 {', '.join(map(str, ordered))}")
+            return {"FINISHED"}
+        except ValueError as exc:
+            _report_error(self, settings, context, str(exc))
             return {"CANCELLED"}
 
 
@@ -821,7 +912,8 @@ class HSW_OT_execute(bpy.types.Operator):
                 raise ValueError(
                     "面板预览绑定的目标对象/网格已变化，已取消执行；请重新预览选区。"
                 )
-            if not resolved["indices"]:
+            params = state.collect_params(settings, settings.tool)
+            if not resolved["indices"] and not core.converts_strokes(settings.tool, params):
                 raise ValueError("选区为空，无法执行工具。")
             domains = list(desc.get("domains") or ())
             if domains and resolved["domain"] not in domains:
@@ -833,7 +925,6 @@ class HSW_OT_execute(bpy.types.Operator):
                     )
                 )
 
-            params = state.collect_params(settings, settings.tool)
             protect = None
             if getattr(settings, "use_protect", False):
                 protect_name = (settings.protect_group or "").strip()
@@ -1045,6 +1136,7 @@ CLASSES = (
     HSW_OT_enter_edit,
     HSW_OT_exit_edit,
     HSW_OT_preview_selection,
+    HSW_OT_pick_path_direction,
     HSW_OT_execute,
     HSW_OT_reset_params,
     HSW_OT_clear_preview,

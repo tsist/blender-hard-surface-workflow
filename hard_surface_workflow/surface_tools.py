@@ -42,13 +42,17 @@ def catalog():
         },
         PROJECT: {
             "label": "Project a Directional Surface Path",
-            "required": ["name", "points", "direction", "max_distance"],
-            "optional": ["closed", "samples_per_span", "max_jump", "collection", "expected_signature"],
+            "required": ["name", "points", "max_distance"],
+            "optional": ["direction", "directions", "radial", "closed", "samples_per_span", "max_jump",
+                         "collection", "expected_signature"],
+            "exactly_one_of": ["direction", "directions", "radial"],
             "read_only": False,
             "parameters": {
                 **common,
                 "points": "Ordered world xyz ray origins in BU. Omit any duplicate closing point.",
-                "direction": "Nonzero world xyz direction. The operation normalizes it.",
+                "direction": "Fixed nonzero world xyz direction, normalized before casting.",
+                "directions": "One nonzero world xyz direction per control point. Unit directions interpolate and normalize between stations.",
+                "radial": "World {origin, axis, sense}: cast along each sample's radius toward (INWARD) or away from (OUTWARD) the axis.",
                 "max_distance": "Positive world ray distance in BU, measured from each origin.",
                 "samples_per_span": "Uniform intervals per origin span, 1–32; default 8.",
                 "max_jump": "Optional world BU limit between successive hits, including the closing edge.",
@@ -140,16 +144,56 @@ def _section_geometry(params, closed):
     return {"landmarks": names, "sections": sections, "flip_normals": reverse}, vertices, faces
 
 
+def _direction(value, label):
+    result = _vector(value, label)
+    if result.length_squared == 0:
+        raise ValueError(f"{label} must be nonzero")
+    result.normalize()
+    return result
+
+
+def _path_directions(params, origins, samples, span_count, steps, closed):
+    modes = {"direction", "directions", "radial"} & params.keys()
+    if len(modes) != 1:
+        raise ValueError("Select exactly one of direction, directions, or radial")
+    field = modes.pop()
+    if field == "direction":
+        fixed = _direction(params[field], field)
+        return {field: list(fixed)}, [fixed] * len(samples), "FIXED"
+    if field == "directions":
+        stations = [_direction(value, "station direction") for value in
+                    _array(params[field], field, len(origins), len(origins))]
+        expanded = []
+        for index in range(span_count):
+            first, second = stations[index], stations[(index + 1) % len(stations)]
+            if first.dot(second) < 0 and first.cross(second).length <= 1e-6:
+                raise ValueError(f"Opposite station directions span {index}; supply an intermediate station")
+            expanded.extend(first.lerp(second, sample / steps).normalized() for sample in range(steps))
+        if not closed:
+            expanded.append(stations[-1])
+        return {field: [list(direction) for direction in stations]}, expanded, "PER_STATION"
+    radial = params[field]
+    if not isinstance(radial, dict) or radial.keys() != {"origin", "axis", "sense"} or radial["sense"] not in ("INWARD", "OUTWARD"):
+        raise ValueError("radial requires origin, nonzero axis and INWARD or OUTWARD sense")
+    center = _vector(radial["origin"], "radial origin")
+    axis = _direction(radial["axis"], "radial axis")
+    multiplier = -1 if radial["sense"] == "INWARD" else 1
+    expanded = []
+    for index, sample in enumerate(samples):
+        from_axis = sample - center
+        radius = from_axis - axis * from_axis.dot(axis)
+        if radius.length_squared <= 1e-24:
+            raise ValueError(f"Radial sample {index} lies on the axis")
+        expanded.append(radius.normalized() * multiplier)
+    return {field: {"origin": list(center), "axis": list(axis), "sense": radial["sense"]}}, expanded, "RADIAL"
+
+
 def _project_geometry(target, params, closed):
     if target.type != "MESH":
         raise ValueError("A directional path requires a mesh target in the current View Layer")
     minimum = 3 if closed else 2
     origins = [_vector(value, "ray origin") for value in
                _array(params["points"], "points", minimum, MAX_PROJECTED_POINTS)]
-    direction = _vector(params["direction"], "direction")
-    if direction.length_squared == 0:
-        raise ValueError("Direction must be nonzero")
-    direction.normalize()
     distance = _number(params["max_distance"], "max_distance", positive=True)
     jump = params.get("max_jump")
     if jump is not None:
@@ -167,6 +211,7 @@ def _project_geometry(target, params, closed):
                for first, second in spans for index in range(steps)]
     if not closed:
         samples.append(origins[-1])
+    direction_recipe, directions, mode = _path_directions(params, origins, samples, end, steps, closed)
 
     graph = bpy.context.evaluated_depsgraph_get()
     matrix = target.evaluated_get(graph).matrix_world.copy()
@@ -174,16 +219,17 @@ def _project_geometry(target, params, closed):
         inverse = matrix.inverted()
     except ValueError as error:
         raise ValueError("Projection target transform is singular") from error
-    local_direction = inverse.to_3x3() @ direction
-    scale = local_direction.length
-    if not math.isfinite(scale) or scale <= 0 or distance * scale > 1.0e30:
-        raise ValueError("Projection target has an invalid transform")
+    inverse_linear = inverse.to_3x3()
     tree = BVHTree.FromObject(target, graph)
     if tree is None:
         raise ValueError("Projection target has no evaluated faces")
     hits = []
     lengths = []
-    for index, origin in enumerate(samples):
+    for index, (origin, direction) in enumerate(zip(samples, directions, strict=True)):
+        local_direction = inverse_linear @ direction
+        scale = local_direction.length
+        if not math.isfinite(scale) or scale <= 0 or distance * scale > 1.0e30:
+            raise ValueError("Projection target has an invalid transform")
         hit, _, _, _ = tree.ray_cast(inverse @ origin, local_direction / scale, distance * scale)
         if hit is None:
             raise ValueError(f"Ray sample {index} missed target: {tuple(origin)}")
@@ -199,9 +245,9 @@ def _project_geometry(target, params, closed):
             raise ValueError(f"Projected segment {index} is collapsed or exceeds max_jump")
     return {
         "target": target.name, "points": [list(origin) for origin in origins],
-        "direction": list(direction), "max_distance": distance,
+        **direction_recipe, "max_distance": distance,
         "samples_per_span": steps, "max_jump": jump,
-    }, hits, lengths
+    }, hits, lengths, mode
 
 
 def _coordinates(obj):
@@ -349,10 +395,10 @@ def execute(obj, tool, params):
                                for index, landmark in enumerate(recipe["landmarks"])},
         )
     else:
-        recipe, points, lengths = _project_geometry(obj, params, closed)
+        recipe, points, lengths, mode = _project_geometry(obj, params, closed)
         faces = None
         report.update(
-            point_count=len(points), frame=bpy.context.scene.frame_current,
+            point_count=len(points), frame=bpy.context.scene.frame_current, direction_mode=mode,
             hit_distance_min=min(lengths), hit_distance_max=max(lengths),
         )
     recipe["closed"] = closed

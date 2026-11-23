@@ -266,6 +266,24 @@ def _draw_parameters(layout, context, settings):
     layout.operator("hard_surface.reset_params", text="重置参数", icon="FILE_REFRESH")
 
 
+class HSW_MT_selection_menu(bpy.types.Menu):
+    bl_idname = "HSW_MT_selection_menu"
+    bl_label = "硬表面选取"
+
+    def draw(self, context):
+        layout = self.layout
+        for source, label, _ in state.SELECTOR_SOURCES:
+            if source != "current":
+                layout.operator("hard_surface.preview_selection", text=label).source = source
+        layout.separator()
+        layout.operator("hard_surface.preview_selection")
+        layout.operator("hard_surface.pick_path_direction")
+
+
+def _draw_select_menu(self, context):
+    self.layout.menu(HSW_MT_selection_menu.bl_idname)
+
+
 def _draw_selection(layout, context, settings):
     target = _display_target(context, settings)
     box = layout.box()
@@ -303,6 +321,22 @@ def _draw_selection(layout, context, settings):
         box.prop(settings, "indices_domain", text="域")
         box.prop(settings, "explicit_indices", text="索引")
         box.label(text="例：3,0,1 或 0-5 或 [3,0,1]；顺序会保留。", icon="INFO")
+    elif source == "box":
+        for prop in ("box_domain", "box_space", "box_minimum", "box_maximum"):
+            box.prop(settings, prop)
+        box.label(text="边和面的所有顶点须在范围内。", icon="INFO")
+
+    if source in ("edge_loop", "edge_ring", "vertex_loop", "face_loop"):
+        box.prop(settings, "sample_path")
+        if settings.sample_path:
+            box.operator("hard_surface.pick_path_direction", text="读取点选顺序")
+            row = box.row(align=True)
+            row.prop(settings, "sample_start")
+            row.prop(settings, "sample_toward", text="下一站（-1=端点）")
+            row = box.row(align=True)
+            row.prop(settings, "sample_step")
+            row.prop(settings, "sample_phase")
+            box.prop(settings, "sample_limit", text="最大遍历站数（0=全路径）")
 
     row = box.row(align=True)
     row.operator("hard_surface.preview_selection", text="预览并高亮", icon="RESTRICT_SELECT_OFF")
@@ -492,6 +526,7 @@ class VIEW3D_PT_hard_surface_run(bpy.types.Panel):
 
 CLASSES = (
     HSW_MT_tool_menu,
+    HSW_MT_selection_menu,
     VIEW3D_PT_hard_surface,
     VIEW3D_PT_hard_surface_parameters,
     VIEW3D_PT_hard_surface_selection,
@@ -499,14 +534,24 @@ CLASSES = (
 )
 
 
+_menu_registered = False
+
+
 def register():
+    global _menu_registered
     for cls in CLASSES:
         existing = getattr(bpy.types, cls.__name__, None)
         if existing is not None:
             state._unregister_class(existing)
         bpy.utils.register_class(cls)
+    bpy.types.VIEW3D_MT_select_edit_mesh.append(_draw_select_menu)
+    _menu_registered = True
 
 
 def unregister():
+    global _menu_registered
+    if _menu_registered:
+        bpy.types.VIEW3D_MT_select_edit_mesh.remove(_draw_select_menu)
+        _menu_registered = False
     for cls in reversed(CLASSES):
         state._unregister_class(cls)

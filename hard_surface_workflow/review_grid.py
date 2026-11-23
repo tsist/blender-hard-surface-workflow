@@ -23,15 +23,19 @@ DIRECTIONS = {
     "TOP": (0, 0, 1), "BOTTOM": (0, 0, -1),
     "LEFT": (-1, 0, 0), "RIGHT": (1, 0, 0),
     "FRONT": (0, 1, 0), "REAR": (0, -1, 0),
-    "FRONT_3Q": (-0.85, 1, 0.78), "REAR_3Q": (0.85, -1, 0.78),
+    "FRONT_3Q": (-0.85, 1, 0.78), "REAR_3Q": (0.85, -1, 0.78), "TOP_3Q": (0, -0.48, 1),
     "WIREFRAME": (-0.85, 1, 0.78),
 }
 ALIASES = {"HERO": "FRONT_3Q", "WIRE": "WIREFRAME"}
-LABELS = {"FRONT_3Q": "FRONT THREE-QUARTER", "REAR_3Q": "REAR THREE-QUARTER", "WIREFRAME": "CONTROL CAGE"}
+LABELS = {"FRONT_3Q": "FRONT THREE-QUARTER", "REAR_3Q": "REAR THREE-QUARTER",
+          "TOP_3Q": "TOP THREE-QUARTER", "WIREFRAME": "CONTROL CAGE"}
 SHADINGS = ("CLAY", "MATERIAL", "SCENE")
+DISPLAYS = ("DEFAULT", "SOLID", "CONTROL_CAGE", "EVALUATED_WIRE")
+WIRE_DISPLAYS = ("CONTROL_CAGE", "EVALUATED_WIRE")
 GEOMETRY = {"MESH", "CURVE", "SURFACE", "FONT"}
 SETTINGS_NAME = "hsw_review_grid"
 WIRE_EDGE_BUDGET = 50_000
+EVALUATED_WIRE_EDGE_BUDGET = 100_000
 
 
 def _integer(value, key, low, high):
@@ -43,19 +47,29 @@ def _integer(value, key, low, high):
 def _options(params, output_path):
     if not isinstance(params, dict):
         raise ValueError("Review grid settings must be a JSON object")
-    unknown = set(params) - {"output", "layout", "objects", "collection", "views", "shading",
-                             "projection", "cell_size", "margin", "samples", "framing"}
+    unknown = set(params) - {"output", "layout", "objects", "collection", "views", "shading", "display",
+                             "projection", "cell_size", "margin", "samples", "framing", "subdivision_level"}
     if unknown:
         raise ValueError(f"Unknown review grid settings: {', '.join(sorted(unknown))}")
     layout = params.get("layout", "2x2")
     shading = params.get("shading", "CLAY")
     projection = params.get("projection", "ORTHO")
+    display = params.get("display", "DEFAULT")
     if not isinstance(layout, str) or layout not in DEFAULT_VIEWS:
         raise ValueError("layout must be 2x2 or 3x3")
     if shading not in SHADINGS or projection not in ("ORTHO", "PERSP"):
         raise ValueError("Use CLAY/MATERIAL/SCENE shading and ORTHO/PERSP projection")
+    if display not in DISPLAYS:
+        raise ValueError("display must be DEFAULT, SOLID, CONTROL_CAGE or EVALUATED_WIRE")
+    if "subdivision_level" in params:
+        if display != "EVALUATED_WIRE":
+            raise ValueError("subdivision_level requires display EVALUATED_WIRE")
+        _integer(params["subdivision_level"], "subdivision_level", 0, 3)
 
-    views = params.get("views", DEFAULT_VIEWS[layout])
+    defaults = DEFAULT_VIEWS[layout]
+    if layout == "3x3" and display != "DEFAULT":
+        defaults = (*defaults[:-1], "TOP_3Q")
+    views = params.get("views", defaults)
     if not isinstance(views, (list, tuple)) or len(views) != len(DEFAULT_VIEWS[layout]):
         raise ValueError(f"{layout} requires exactly {len(DEFAULT_VIEWS[layout])} views")
     camera_requests = []
@@ -81,7 +95,7 @@ def _options(params, output_path):
         raise ValueError("The PNG output must be an absolute path in an existing directory")
     if path.exists() or path.is_symlink():
         raise ValueError(f"A file already exists at {path}")
-    return layout, shading, projection, camera_requests, margin, path, (
+    return layout, shading, display, projection, camera_requests, margin, path, (
         _integer(params.get("cell_size", 512), "cell_size", 128, 1024),
         _integer(params.get("samples", 24), "samples", 1, 128),
     )
@@ -198,52 +212,94 @@ def _material(name, color, create):
     return material
 
 
-def _wire_cage(source, depsgraph, render_scene, create, radius, clay, dark):
-    cage = _model_copy(source, depsgraph, render_scene, create, cage=True)
-    if cage is None:
-        return []
-    cage.data.materials.clear()
-    cage.data.materials.append(clay)
-    # Put the visible lines on the unsmoothed cage, with a thin round stroke in world units.
-    # The shaded cage faces occlude its back edges.
-    curve = create(bpy.data.curves.new("Review cage edges", "CURVE"))
+def _subdivision_models(scene, layer, targets, models, render_scene, create, level):
+    pairs = [(source, [mod.name for mod in source.modifiers if mod.type == "SUBSURF" and mod.show_viewport])
+             for source in targets]
+    overrides = [(source, names) for source, names in pairs if names]
+    if not overrides:
+        raise ValueError("subdivision_level requires an enabled Subdivision Surface modifier on a target")
+    if scene.render.use_simplify and scene.render.simplify_subdivision < level:
+        raise ValueError("Scene Simplify caps viewport subdivision below subdivision_level")
+
+    # Keep modifier dependencies in the source view layer. Only the temporary
+    # objects own edited modifiers. Their input mesh datablocks remain read-only.
+    copies = []
+    replacements = {}
+    try:
+        for source, names in overrides:
+            item = source.copy()
+            copies.append((source, item, names))
+            scene.collection.objects.link(item)
+            for name in names:
+                item.modifiers[name].levels = level
+        layer.update()
+        graph = bpy.context.evaluated_depsgraph_get()
+        for source, item, names in copies:
+            evaluated = item.evaluated_get(graph)
+            if any(evaluated.modifiers[name].levels != level for name in names):
+                raise ValueError(f"Subdivision override could not be preserved during evaluation for {source.name!r}")
+            replacements[source] = _model_copy(item, graph, render_scene, create)
+    finally:
+        bpy.data.batch_remove(ids=[item for _, item, _ in copies])
+        layer.update()
+    return [replacements.get(source, model) for source, model in zip(targets, models)], {
+        source.name: names for source, names in overrides
+    }
+
+
+def _wire_geometry(surface, render_scene, create, radius, clay, dark):
+    surface.data.materials.clear()
+    surface.data.materials.append(clay)
+    # The surface occludes its back edges. The stroke follows the exact input
+    # mesh edges, including edges without adjacent faces.
+    curve = create(bpy.data.curves.new("Review mesh edges", "CURVE"))
     curve.dimensions = "3D"
     curve.resolution_u = 1
     curve.bevel_depth = radius
     curve.bevel_resolution = 0
     curve.materials.append(dark)
-    vertices = [cage.matrix_world @ vertex.co for vertex in cage.data.vertices]
-    for edge in cage.data.edges:
+    vertices = [surface.matrix_world @ vertex.co for vertex in surface.data.vertices]
+    for edge in surface.data.edges:
         line = curve.splines.new("POLY")
         line.points.add(1)
         for point, vertex in zip(line.points, edge.vertices):
             point.co = (*vertices[vertex], 1.0)
     wire = create(bpy.data.objects.new("Review edges", curve))
     render_scene.collection.objects.link(wire)
-    return [cage, wire]
+    return [surface, wire]
 
 
-def _wire_selection(sources, evaluated):
+def _wire_selection(sources, evaluated, display):
     # Favor the larger complete control cages. Generated graphics or fine repeating
-    # details can otherwise consume the entire line budget in a large assembly.
+    # details can otherwise consume the entire line budget in a legacy board.
+    evaluated_wire = display == "EVALUATED_WIRE"
+    budget = EVALUATED_WIRE_EDGE_BUDGET if evaluated_wire else WIRE_EDGE_BUDGET
+    count_key = "evaluated_edges" if evaluated_wire else "control_edges"
     by_scale = sorted(zip(sources, evaluated), key=lambda pair: (-pair[1].dimensions.length, pair[0].name))
     included, omitted, selected = [], [], []
     edge_count = 0
     for source, model in by_scale:
-        edges = len(source.data.edges) if source.type == "MESH" else 0
-        item = {"object": source.name, "control_edges": edges, "bounds_diagonal": model.dimensions.length}
-        if source.type != "MESH":
+        mesh = model.data if evaluated_wire else source.data if source.type == "MESH" else None
+        edges = len(mesh.edges) if mesh is not None else 0
+        item = {"object": source.name, count_key: edges, "bounds_diagonal": model.dimensions.length}
+        if mesh is None:
             omitted.append({**item, "reason": "NO_MESH_CONTROL_CAGE"})
         elif not edges:
-            omitted.append({**item, "reason": "NO_CONTROL_EDGES"})
-        elif edge_count + edges > WIRE_EDGE_BUDGET:
+            reason = "NO_EVALUATED_EDGES" if evaluated_wire else "NO_CONTROL_EDGES"
+            omitted.append({**item, "reason": reason})
+        elif edge_count + edges > budget:
             omitted.append({**item, "reason": "EDGE_BUDGET"})
         else:
             edge_count += edges
             included.append(item)
-            selected.append(source)
-    mode = ("PARTIAL_CONTROL_CAGE" if omitted else "CONTROL_CAGE") if included else "EVALUATED_SOLID"
-    return selected, {"mode": mode, "edge_budget": WIRE_EDGE_BUDGET, "displayed_edges": edge_count,
+            selected.append((source, model))
+    if display != "DEFAULT" and omitted:
+        reasons = ", ".join(f"{item['object']}: {item['reason']} ({item[count_key]} edges)" for item in omitted)
+        raise ValueError(f"{display} cannot include all requested targets within {budget:,} edges: {reasons}")
+    mode = display
+    if display == "DEFAULT":
+        mode = ("PARTIAL_CONTROL_CAGE" if omitted else "CONTROL_CAGE") if included else "EVALUATED_SOLID"
+    return selected, {"mode": mode, "edge_budget": budget, "displayed_edges": edge_count,
                       "included": included, "omitted": omitted, "omitted_display": "EVALUATED_SOLID"}
 
 
@@ -434,7 +490,7 @@ def _temporary_scene():
 
 def produce(scene, params, *, output_path=None):
     """Render four or nine views into a single PNG using Blender's current dependency graph."""
-    layout, shading, projection, views, margin, path, (cell, samples) = _options(params, output_path)
+    layout, shading, display_mode, projection, views, margin, path, (cell, samples) = _options(params, output_path)
     fixed = _fixed_framing(params, projection)
     if not isinstance(scene, bpy.types.Scene):
         raise ValueError("A Blender scene is required")
@@ -447,9 +503,11 @@ def produce(scene, params, *, output_path=None):
     board, heading, gap, label_scale = _board(side, cell)
     tiles = []
     wire_report = None
+    subdivision_report = None
     with _temporary_scene() as (render_scene, create), tempfile.TemporaryDirectory(prefix=".hsw-grid-", dir=path.parent) as folder:
         folder = Path(folder)
-        _setup_render(render_scene, shading, cell, samples)
+        solid_shading = "CLAY" if display_mode in WIRE_DISPLAYS else shading
+        _setup_render(render_scene, solid_shading, cell, samples)
         render_scene.frame_set(scene.frame_current, subframe=scene.frame_subframe)
         with bpy.context.temp_override(scene=scene, view_layer=layer):
             depsgraph = bpy.context.evaluated_depsgraph_get()
@@ -457,7 +515,7 @@ def produce(scene, params, *, output_path=None):
             render_scene.view_layers[0].update()
             minimum, maximum = _bounds(models)
             span = (maximum - minimum).length
-            if shading == "SCENE":
+            if solid_shading == "SCENE":
                 _set_lighting(scene, layer, depsgraph, render_scene, (minimum+maximum)*0.5, span, create)
             else:
                 render_scene.world = create(bpy.data.worlds.new("Review background"))
@@ -465,28 +523,44 @@ def produce(scene, params, *, output_path=None):
             cameras, center, width = _make_cameras(
                 scene, depsgraph, render_scene, views, projection, minimum, maximum, margin, fixed, create,
             )
-            cages = []
-            wire_sources = []
-            if "WIREFRAME" in views:
-                wire_sources, wire_report = _wire_selection(targets, models)
-            if wire_sources:
-                clay = _material("Review cage surface", (0.61, 0.66, 0.73, 1), create)
-                dark = _material("Review cage lines", (0.018, 0.03, 0.05, 1), create)
-                # Scale stroke width with output resolution so cage edges survive at review-thumbnail sizes.
+            wires = []
+            wire_pairs = []
+            if display_mode in WIRE_DISPLAYS or (display_mode == "DEFAULT" and "WIREFRAME" in views):
+                wire_models = models
+                if "subdivision_level" in params:
+                    level = params["subdivision_level"]
+                    wire_models, overrides = _subdivision_models(scene, layer, targets, models, render_scene, create, level)
+                    subdivision_report = {"mode": "OVERRIDE", "level": level, "objects": overrides}
+                elif display_mode == "EVALUATED_WIRE":
+                    subdivision_report = {"mode": "VIEWPORT"}
+                wire_pairs, wire_report = _wire_selection(targets, wire_models, display_mode)
+            if wire_pairs:
+                clay = _material("Review wire surface", (0.61, 0.66, 0.73, 1), create)
+                dark = _material("Review wire lines", (0.018, 0.03, 0.05, 1), create)
                 stroke = width / max(200, cell * 2.2)
-                for source in wire_sources:
-                    cages.extend(_wire_cage(source, depsgraph, render_scene, create, stroke, clay, dark))
+                if display_mode == "EVALUATED_WIRE":
+                    # A subpixel radius keeps adjacent L2 lines distinguishable.
+                    radius_px = max(0.24, min(0.43, cell / (9 * math.sqrt(wire_report["displayed_edges"]))))
+                    stroke = width * radius_px / cell
+                wire_report["stroke_radius_world"] = stroke
+                for source, model in wire_pairs:
+                    surface = model if display_mode == "EVALUATED_WIRE" else _model_copy(
+                        source, depsgraph, render_scene, create, cage=True,
+                    )
+                    wires.extend(_wire_geometry(surface, render_scene, create, stroke, clay, dark))
+            wire_sources = {source for source, _ in wire_pairs}
         base_engine = render_scene.render.engine
         display = render_scene.display.shading
         base_color = display.color_type
         tile_path = folder / "tile.png"
         for index, (camera, preset, label) in enumerate(cameras):
-            wire_requested = preset == "WIREFRAME"
-            wire = wire_requested and bool(cages)
-            if wire_requested:
-                label = {"PARTIAL_CONTROL_CAGE": "CAGE AND SOLIDS", "EVALUATED_SOLID": "EVALUATED SOLID"}.get(
-                    wire_report["mode"], label,
-                )
+            legacy_wire = display_mode == "DEFAULT" and preset == "WIREFRAME"
+            render_display = wire_report["mode"] if legacy_wire or display_mode in WIRE_DISPLAYS else "SOLID"
+            wire = render_display in (*WIRE_DISPLAYS, "PARTIAL_CONTROL_CAGE")
+            if legacy_wire:
+                label = {"PARTIAL_CONTROL_CAGE": "CAGE AND SOLIDS", "EVALUATED_SOLID": "EVALUATED SOLID"}.get(render_display, label)
+            elif preset == "WIREFRAME":
+                label = LABELS["FRONT_3Q"]
             render_scene.render.engine = "BLENDER_WORKBENCH" if wire else base_engine
             display.color_type = "MATERIAL" if wire else base_color
             display.light = "FLAT" if wire else "STUDIO"
@@ -494,7 +568,7 @@ def produce(scene, params, *, output_path=None):
             display.show_specular_highlight = not wire
             for obj, source in zip(models, targets):
                 obj.hide_render = wire and source in wire_sources
-            for obj in cages:
+            for obj in wires:
                 obj.hide_render = not wire
             render_scene.camera = camera
             render_scene.render.filepath = str(tile_path)
@@ -507,23 +581,36 @@ def produce(scene, params, *, output_path=None):
             _label(board, x + 4, y + 6, label, label_scale, cell)
             board[y + heading:y + heading + cell, x:x + cell] = _read_tile(tile_path, cell)
             tile_path.unlink()
-            tiles.append({"label": label, "preset": preset, "projection": camera.data.type,
+            tiles.append({"label": label, "preset": preset, "projection": camera.data.type, "display": render_display,
                           "rect": [x, y + heading, cell, cell], "ortho_scale": camera.data.ortho_scale
                           if camera.data.type == "ORTHO" else None,
                           "camera_position": list(camera.matrix_world.translation)})
         _write_board(board, path, folder / "board.png")
-    return {"output": str(path), "layout": layout, "views": tiles, "shading": shading,
+    geometry = {
+        "DEFAULT": "evaluated viewport meshes; WIREFRAME shows budgeted whole unsubdivided mesh cages",
+        "SOLID": "evaluated viewport meshes",
+        "CONTROL_CAGE": "whole unsubdivided mesh cages at evaluated object transforms",
+        "EVALUATED_WIRE": "actual evaluated mesh edges at evaluated object transforms",
+    }
+    return {"output": str(path), "layout": layout, "views": tiles, "shading": shading, "display": display_mode,
             "image_size": [int(board.shape[1]), int(board.shape[0])],
             "objects": [obj.name for obj in targets], "view_layer": layer.name,
             "bounds": {"minimum": list(minimum), "maximum": list(maximum)},
             "framing": {"center": list(center), "ortho_scale": width} if projection == "ORTHO" else None,
             "framing_mode": "FIXED" if fixed else "AUTO",
-            "geometry": "evaluated viewport meshes; WIREFRAME shows budgeted whole unsubdivided mesh cages",
+            "geometry": geometry[display_mode],
+            **({"evaluated_subdivision": subdivision_report} if subdivision_report else {}),
             **({"wireframe": wire_report} if wire_report else {})}
 
 
 class HSW_PG_review_grid(bpy.types.PropertyGroup):
     layout: EnumProperty(name="网格", items=[(v, v, "") for v in DEFAULT_VIEWS], default="2x2")
+    display: EnumProperty(name="几何显示", items=[("DEFAULT", "默认混合", "实体与预设控制笼"),
+                                                   ("SOLID", "全格实体", "显示当前视口修改器求值"),
+                                                   ("CONTROL_CAGE", "全格控制笼", "显示基础网格的真实边线"),
+                                                   ("EVALUATED_WIRE", "全格求值线框", "显示修改器求值后网格的真实边线")])
+    override_subdivision: BoolProperty(name="临时指定细分级别", description="只在临时对象上覆盖已启用的细分曲面修改器")
+    subdivision_level: IntProperty(name="细分级别", min=0, max=3, default=2)
     shading: EnumProperty(name="外观", items=[("CLAY", "白模", "Workbench 浅灰白模"),
                                             ("MATERIAL", "材质色", "Workbench 材质视口颜色"),
                                             ("SCENE", "场景材质", "Cycles 实际材质与灯光")])
@@ -554,7 +641,9 @@ class HSW_OT_review_grid(bpy.types.Operator, ExportHelper):
     def execute(self, context):
         settings = getattr(context.scene, SETTINGS_NAME)
         request = {"layout": settings.layout, "shading": settings.shading, "projection": settings.projection,
-                   "cell_size": settings.cell_size, "output": bpy.path.abspath(self.filepath)}
+                   "display": settings.display, "cell_size": settings.cell_size, "output": bpy.path.abspath(self.filepath)}
+        if settings.display == "EVALUATED_WIRE" and settings.override_subdivision:
+            request["subdivision_level"] = settings.subdivision_level
         if settings.target == "COLLECTION":
             if settings.collection is None:
                 self.report({"ERROR"}, "请选择模型集合")
@@ -587,8 +676,16 @@ class VIEW3D_PT_hsw_review_grid(bpy.types.Panel):
     def draw(self, context):
         settings = getattr(context.scene, SETTINGS_NAME)
         layout = self.layout
-        for prop in ("layout", "shading", "projection", "target"):
+        for prop in ("layout", "display"):
             layout.prop(settings, prop)
+        if settings.display not in WIRE_DISPLAYS:
+            layout.prop(settings, "shading")
+        if settings.display == "EVALUATED_WIRE":
+            layout.prop(settings, "override_subdivision")
+            if settings.override_subdivision:
+                layout.prop(settings, "subdivision_level")
+        layout.prop(settings, "projection")
+        layout.prop(settings, "target")
         if settings.target == "COLLECTION":
             layout.prop(settings, "collection")
         layout.prop(settings, "cell_size")

@@ -22,6 +22,8 @@ import bpy
 from mathutils import Matrix, Vector
 from mathutils.geometry import intersect_line_line_2d
 
+from . import precision_edit
+
 
 _EPS = 1e-12
 _MAX_COORD = 1e12
@@ -63,6 +65,12 @@ def _enum(default, description, choices):
     return _option("string", default, description, enum=choices)
 
 
+def _vector(default, description):
+    result = _option("array", default, description, items={"type": "number", "min": -1e9, "max": 1e9})
+    result.update(minItems=3, maxItems=3)
+    return result
+
+
 def _tool(tool, label, description, domains, topology_changes, parameters):
     return {
         "tool": tool,
@@ -78,7 +86,7 @@ def _tool(tool, label, description, domains, topology_changes, parameters):
 TOOLS = {
     "form.recess": _tool(
         "form.recess", "面内嵌沉台",
-        "对选中面做内插并按法线压入；RECESS 生成垂直侧壁和平面底，COUNTERSINK 让内插环直接倾斜下压。",
+        "内插后沿局部法线压入。逐面使用各自原法线，区域使用一个面区平均法线。RECESS 保留直壁，COUNTERSINK 从外圈直接过渡到内盘。",
         ("FACE",), True, {
             "thickness": _number(0.05, "内插宽度（局部单位）", 1e-6, 1000.0),
             "depth": _number(0.05, "沿面法线向内的深度（局部单位）", 1e-6, 1000.0),
@@ -99,8 +107,8 @@ TOOLS = {
             "mode": _enum("CENTER", "合并目标", ("CENTER", "ACTIVE")),
         }),
     "vertex.connect": _tool(
-        "vertex.connect", "连接选点",
-        "按选择顺序或确定性空间顺序连接选中顶点：闭合时生成面，开放时生成边链。",
+        "vertex.connect", "从选点建边或面",
+        "按选点顺序或空间排序建边链，闭合且至少三点时建面。建边保留原面。要切开已有面，请用原生连接顶点路径（J）或切割（K）。",
         ("VERT",), True, {
             "close": _boolean(True, "闭合为面；关闭时生成开放边链"),
             "tolerance": _number(1e-5, "闭合面的平面容差（局部单位）", 1e-9, 1.0),
@@ -139,6 +147,30 @@ TOOLS = {
             "offset": _number(0.0, "沿平面法线的偏移", -1000.0, 1000.0),
             "factor": _number(1.0, "投影混合比例", 0.0001, 1.0),
         }),
+    "align.reference": _tool(
+        "align.reference", "按世界基准定位选区",
+        "整体移动选区。点、平面、边线或方向模式只平移；FRAME 对齐指定法向和切轴，保留世界空间尺寸与滚转关系。",
+        ("VERT", "EDGE", "FACE"), False, {
+            "mode": _enum("POINT", "定位方式", ("POINT", "PLANE", "EDGE", "DIRECTION", "FRAME")),
+            "source_world": _vector([0, 0, 0], "源参考点（世界坐标）"),
+            "target_world": _vector([0, 0, 0], "目标点、工作面原点或目标边起点（世界坐标）"),
+            "target_end_world": _vector([1, 0, 0], "EDGE 模式的目标边终点（世界坐标）"),
+            "target_direction": _vector([0, 0, 1], "运动方向或目标平面法向（世界方向）"),
+            "plane_offset": _number(0.0, "PLANE 模式沿世界法向的有符号偏移", -1000., 1000.),
+            "source_normal": _vector([0, 0, 1], "FRAME 源法向（世界方向）"),
+            "source_tangent": _vector([1, 0, 0], "FRAME 源切轴（世界方向）"),
+            "target_tangent": _vector([1, 0, 0], "FRAME 目标切轴（世界方向）"),
+        }),
+    "mesh.snap_symmetry": _tool(
+        "mesh.snap_symmetry", "吸附到对称位置",
+        "按局部轴从固定侧查找镜像点，只调整选中的接收侧和可选中线点，保留两侧拓扑。",
+        ("VERT", "EDGE", "FACE"), False, {
+            "direction": _enum("-X", "以哪一侧为固定源", ("-X", "+X", "-Y", "+Y", "-Z", "+Z")),
+            "threshold": _number(0.05, "镜像候选匹配距离（局部单位）", 1e-9, 1000.),
+            "factor": _number(1.0, "接收侧从当前位置向镜像位置插值的比例", 0., 1.),
+            "use_center": _boolean(True, "把指定容差内的已选点吸附到中线"),
+            "center_tolerance": _number(1e-5, "中线容差（局部单位，至多为匹配距离）", 0., 1000.),
+        }) | {"coordinates_only": True},
     "support.face": _tool(
         "support.face", "面区支持线",
         "在选中面区内部按宽度生成一圈或多圈同心内插支持线，不改变面区外轮廓。",
@@ -170,6 +202,9 @@ TOOLS = {
             "radius": _number(0.25, "圆孔半径（局部单位）", 1e-6, 1000.0),
             "segments": _integer(16, "圆孔边数", 8, 512),
             "tolerance": _number(1e-5, "平面判定容差（局部单位）", 1e-9, 1.0),
+            "center_mode": _enum("VERTEX_MEDIAN", "孔心基准", ("VERTEX_MEDIAN", "AREA_CENTROID", "EXPLICIT")),
+            "center_local": _vector([0, 0, 0], "EXPLICIT 单个源面的孔心（本地坐标）"),
+            "radius_mode": _enum("VERTEX_RADIUS", "半径按孔缘顶点或圆规净空解释", ("VERTEX_RADIUS", "CLEAR_RADIUS")),
         }),
 }
 
@@ -218,6 +253,8 @@ def _check_scalar(name, kind, value, rule):
     if kind == "array":
         if type(value) is not list:
             raise ValueError(f"{name} must be array")
+        if not rule.get("minItems", 0) <= len(value) <= rule.get("maxItems", math.inf):
+            raise ValueError(f"{name} has the wrong number of elements")
         items = rule.get("items")
         result = []
         for item in value:
@@ -288,7 +325,7 @@ def _mesh_context(spec):
     active_index = active.index if isinstance(active, bmesh.types.BMVert) and active.select else None
     order = [v.index for v in bm.select_history if isinstance(v, bmesh.types.BMVert) and v.select]
     return obj, bm, domain, indices, {"cursor_local": cursor_local, "active_vertex_index": active_index,
-                                      "vertex_order": order}
+                                      "vertex_order": order, "matrix_world": obj.matrix_world.copy()}
 
 
 def _elements(bm, domain, indices):
@@ -606,6 +643,17 @@ def _existing_edge(bm, first, second):
 # Tool implementations
 
 
+def _lower_recess_vertices(vertices, normal, depth, measurements):
+    offset = normal * depth
+    for vertex in vertices:
+        before = vertex.co.copy()
+        vertex.co = before - offset
+        actual = (before - vertex.co).dot(normal)
+        if not math.isclose(actual, depth, rel_tol=0.01):
+            raise ValueError("Mesh coordinate precision cannot represent the requested recess depth within 1%")
+        measurements.append(actual)
+
+
 def _form_recess(bm, domain, indices, settings, context):
     faces = _elements(bm, domain, indices)
     if not faces:
@@ -620,12 +668,12 @@ def _form_recess(bm, domain, indices, settings, context):
     before_counts = (len(bm.verts), len(bm.edges), len(bm.faces))
     before_sets = _snapshot(bm)
     cap_faces = []
+    depths = []
     if settings["individual"]:
-        for face in list(faces):
+        normals = [face.normal.copy().normalized() for face in faces]
+        for face, normal in zip(faces, normals):
             if not face.is_valid:
                 raise ValueError("A selected face became invalid")
-            face.normal_update()
-            normal = face.normal.copy().normalized()
             if normal.length <= 0.5:
                 raise ValueError("A selected face has an invalid normal")
             bmesh.ops.inset_individual(
@@ -641,12 +689,13 @@ def _form_recess(bm, domain, indices, settings, context):
                     raise ValueError("Recess extrusion produced no cap vertices")
                 cap_faces.extend(element for element in extrusion["geom"]
                                  if isinstance(element, bmesh.types.BMFace))
-                for vertex in new_vertices:
-                    vertex.co = vertex.co - normal * settings["depth"]
+                _lower_recess_vertices(new_vertices, normal, settings["depth"], depths)
                 if face.is_valid:
                     bm.faces.remove(face)
+            else:
+                _lower_recess_vertices(face.verts, normal, settings["depth"], depths)
     else:
-        result = bmesh.ops.inset_region(
+        bmesh.ops.inset_region(
             bm, faces=list(faces), faces_exclude=[], use_boundary=True,
             use_even_offset=True, use_interpolate=True, use_relative_offset=False,
             use_edge_rail=False, thickness=settings["thickness"], depth=0.0,
@@ -663,17 +712,14 @@ def _form_recess(bm, domain, indices, settings, context):
                 raise ValueError("Recess extrusion produced no cap vertices")
             cap_faces.extend(element for element in extrusion["geom"]
                              if isinstance(element, bmesh.types.BMFace))
-            for vertex in new_vertices:
-                vertex.co = vertex.co - normal * settings["depth"]
+            _lower_recess_vertices(new_vertices, normal, settings["depth"], depths)
             for face in faces:
                 if face.is_valid:
                     bm.faces.remove(face)
         else:
             inner_vertices = {vertex for face in faces for vertex in face.verts}
-            for vertex in inner_vertices:
-                vertex.co = vertex.co - normal * settings["depth"]
+            _lower_recess_vertices(inner_vertices, normal, settings["depth"], depths)
     bm.normal_update()
-    new_verts, new_edges, new_faces = _new_elements(bm, before_sets)
     selected = [face for face in cap_faces if face.is_valid]
     if settings["mode"] == "COUNTERSINK":
         selected = [face for face in faces if face.is_valid]
@@ -684,6 +730,9 @@ def _form_recess(bm, domain, indices, settings, context):
         "mode": settings["mode"],
         "thickness": settings["thickness"],
         "depth": settings["depth"],
+        "requested_depth": settings["depth"],
+        "measured_depth_min": min(depths),
+        "measured_depth_max": max(depths),
         "individual": settings["individual"],
         "cap_faces": len(selected),
     })
@@ -752,26 +801,31 @@ def _vertex_merge(bm, domain, indices, settings, context):
         raise ValueError("Select at least two vertices to merge")
     if any(not _finite(vertex.co) for vertex in verts):
         raise ValueError("Selected vertices contain a nonfinite coordinate")
-    if settings["mode"] == "ACTIVE":
+    active = settings["mode"] == "ACTIVE"
+    if active:
         index = context.get("active_vertex_index")
-        if index is None:
+        if index not in indices:
             raise ValueError("No active vertex is recorded; use CENTER merge mode")
-        target = bm.verts[index].co.copy()
+        result = bm.verts[index]
+        target = result.co.copy()
     else:
         target = sum((vertex.co for vertex in verts), Vector((0.0, 0.0, 0.0))) / len(verts)
     before_counts = (len(bm.verts), len(bm.edges), len(bm.faces))
     before_sets = _snapshot(bm)
-    bmesh.ops.pointmerge(bm, verts=list(verts), merge_co=target)
+    if active:
+        bmesh.ops.weld_verts(bm, targetmap={vertex: result for vertex in verts if vertex != result})
+    else:
+        bmesh.ops.pointmerge(bm, verts=list(verts), merge_co=target)
+        survivors = [vertex for vertex in verts if vertex.is_valid]
+        if len(survivors) != 1:
+            raise ValueError("Merge did not leave one selected vertex")
+        result = survivors[0]
     bm.normal_update()
-    tolerance = max(1e-8, 1e-6 * max(1.0, target.length))
-    result = None
-    for vertex in bm.verts:
-        if (vertex.co - target).length <= tolerance:
-            result = vertex
-            break
-    if result is None:
+    if not result.is_valid or result.co != target:
         raise ValueError("Merge did not produce a vertex at the requested target")
     _select_verts(bm, [result])
+    bm.select_history.clear()
+    bm.select_history.add(result)
     return _base_stats(bm, before_counts, before_sets, {
         "mode": settings["mode"],
         "merged_vertices": len(verts),
@@ -788,6 +842,7 @@ def _vertex_connect(bm, domain, indices, settings, context):
     ordered = _ordered_selected_verts(bm, verts, settings["close"], settings["tolerance"], context["vertex_order"])
     before_counts = (len(bm.verts), len(bm.edges), len(bm.faces))
     before_sets = _snapshot(bm)
+    wire_edges_across_faces = 0
     if settings["close"] and len(ordered) >= 3:
         existing = _existing_face(bm, ordered)
         if existing is not None:
@@ -815,6 +870,8 @@ def _vertex_connect(bm, domain, indices, settings, context):
                 new_edges.append(bm.edges.new((first, second)))
             except ValueError as exc:
                 raise ValueError("Selected vertices cannot be connected") from exc
+            if any(second in face.verts for face in first.link_faces):
+                wire_edges_across_faces += 1
         if not new_edges:
             raise ValueError("Every requested connection already exists")
         created_edges = len(new_edges)
@@ -826,6 +883,7 @@ def _vertex_connect(bm, domain, indices, settings, context):
         "connected_vertices": len(ordered),
         "created_faces": created_faces,
         "created_edges": created_edges,
+        "wire_edges_across_faces": wire_edges_across_faces,
     })
 
 
@@ -903,6 +961,7 @@ def _align_axis(bm, domain, indices, settings, context):
         raise ValueError("Selection has no vertices to align")
     before_counts = (len(bm.verts), len(bm.edges), len(bm.faces))
     before_sets = _snapshot(bm)
+    neighborhood = precision_edit.remember_neighborhood(verts, guard_orientation=True)
     axis_index = {"X": 0, "Y": 1, "Z": 2}[settings["axis"]]
     values = [vertex.co[axis_index] for vertex in verts]
     if settings["mode"] == "MIN":
@@ -921,6 +980,7 @@ def _align_axis(bm, domain, indices, settings, context):
             moved += 1
         vertex.co[axis_index] = value
     bm.normal_update()
+    precision_edit.check_neighborhood(neighborhood, "Axis alignment")
     if domain == "FACE":
         for face in _elements(bm, domain, indices):
             if face.calc_area() <= _EPS:
@@ -933,6 +993,18 @@ def _align_axis(bm, domain, indices, settings, context):
         "target": target,
         "moved_vertices": moved,
     })
+
+
+def _precision_alignment(bm, domain, indices, settings, context, operation):
+    verts = _involved_verts(bm, domain, indices)
+    before_counts = (len(bm.verts), len(bm.edges), len(bm.faces))
+    before_sets = _snapshot(bm)
+    if operation == "align.reference":
+        result = precision_edit.position_reference(verts, settings, context["matrix_world"])
+    else:
+        result = precision_edit.snap_symmetry(bm, verts, settings)
+    bm.normal_update()
+    return _base_stats(bm, before_counts, before_sets, result)
 
 
 def _align_plane(bm, domain, indices, settings, context):
@@ -1120,13 +1192,13 @@ def _plan_hole(bm, face, settings):
     normal = face.normal.copy().normalized()
     if normal.length <= 0.5:
         raise ValueError("A selected face has an invalid normal")
-    center = face.calc_center_median()
+    origin = face.calc_center_median()
     outer = [loop.vert for loop in face.loops]
     if len(outer) < 3:
         raise ValueError("A selected face needs at least three boundary vertices")
     if settings["segments"] < len(outer):
         raise ValueError("Hole segments must be at least the face boundary vertex count")
-    if max(abs((vertex.co - center).dot(normal)) for vertex in outer) > settings["tolerance"]:
+    if max(abs((vertex.co - origin).dot(normal)) for vertex in outer) > settings["tolerance"]:
         raise ValueError("The selected face is not planar enough for a circular hole")
     guide = None
     for index in range(len(outer)):
@@ -1141,13 +1213,26 @@ def _plan_hole(bm, face, settings):
     v = normal.cross(u).normalized()
     if v.length <= 0.5:
         raise ValueError("Cannot build a plane basis for the selected face")
+    offsets = [vertex.co - origin for vertex in outer]
+    plane_offsets = [offset - normal * offset.dot(normal) for offset in offsets]
+    coords = [(offset.dot(u), offset.dot(v)) for offset in plane_offsets]
+    center_mode = settings["center_mode"]
+    if center_mode == "EXPLICIT":
+        reference = Vector(settings["center_local"]) - origin
+        if abs(reference.dot(normal)) > settings["tolerance"]:
+            raise ValueError("Explicit hole center is outside the selected face plane tolerance")
+        center_u, center_v = reference.dot(u), reference.dot(v)
+    elif center_mode == "AREA_CENTROID":
+        center_u, center_v = _polygon_centroid(coords)
+    else:
+        center_u, center_v = 0.0, 0.0
+    center = origin + center_u * u + center_v * v
     angles = []
     projected = []
-    for vertex in outer:
-        delta = vertex.co - center
-        delta = delta - normal * delta.dot(normal)
-        projected.append((delta.dot(u), delta.dot(v)))
-        angles.append(math.atan2(delta.dot(v), delta.dot(u)))
+    for x, y in coords:
+        x, y = x - center_u, y - center_v
+        projected.append((x, y))
+        angles.append(math.atan2(y, x))
     if not _point_in_polygon((0.0, 0.0), projected):
         raise ValueError("The face center is outside the boundary; the face is not star-shaped enough")
     unwrapped = [angles[0]]
@@ -1166,8 +1251,6 @@ def _plan_hole(bm, face, settings):
         _point_segment_distance_2d((0.0, 0.0), projected[index],
                                    projected[(index + 1) % len(projected)])
         for index in range(len(projected)))
-    if settings["radius"] >= minimum_distance - 1e-9:
-        raise ValueError("Hole radius is too large for the selected face")
     remaining = settings["segments"] - len(outer)
     quotas = [remaining * delta / (2.0 * math.pi) for delta in deltas]
     counts = [1 + int(math.floor(quota)) for quota in quotas]
@@ -1179,6 +1262,12 @@ def _plan_hole(bm, face, settings):
         counts[index] += 1
     if sum(counts) != settings["segments"]:
         raise ValueError("Could not allocate hole segments")
+    radius = settings["radius"]
+    if settings["radius_mode"] == "CLEAR_RADIUS":
+        max_step = max(delta / count for delta, count in zip(deltas, counts))
+        radius /= math.cos(max_step / 2.0)
+    if radius >= minimum_distance - 1e-9:
+        raise ValueError("Hole radius is too large for the selected face")
     return {
         "face": face,
         "normal": normal,
@@ -1189,9 +1278,22 @@ def _plan_hole(bm, face, settings):
         "angles": unwrapped,
         "deltas": deltas,
         "counts": counts,
+        "radius": radius,
         "material_index": face.material_index,
         "smooth": face.smooth,
     }
+
+
+def _polygon_centroid(points):
+    twice_area = x_sum = y_sum = 0.0
+    for (x, y), (next_x, next_y) in zip(points, points[1:] + points[:1]):
+        cross = x * next_y - next_x * y
+        twice_area += cross
+        x_sum += (x + next_x) * cross
+        y_sum += (y + next_y) * cross
+    if abs(twice_area) <= _EPS:
+        raise ValueError("Cannot calculate the selected face area centroid")
+    return x_sum / (3.0 * twice_area), y_sum / (3.0 * twice_area)
 
 
 def _point_segment_distance_2d(point, start, end):
@@ -1219,18 +1321,33 @@ def _point_in_polygon(point, polygon):
     return inside
 
 
+def _rim_edge_distance(center, a, b):
+    edge = tuple(end - start for start, end in zip(a, b))
+    delta = tuple(position - start for position, start in zip(center, a))
+    squared = math.fsum(component * component for component in edge)
+    if squared == 0.0:
+        return math.dist(center, a)
+    factor = math.fsum(offset * component for offset, component in zip(delta, edge)) / squared
+    fraction = min(1.0, max(0.0, factor))
+    return math.hypot(*(offset - fraction * component for offset, component in zip(delta, edge)))
+
+
 def _form_hole(bm, domain, indices, settings, context):
     faces = _elements(bm, domain, indices)
     if not faces:
         raise ValueError("Select at least one face")
+    if settings["center_mode"] == "EXPLICIT" and len(faces) != 1:
+        raise ValueError("Explicit hole center requires exactly one selected face")
     plans = [_plan_hole(bm, face, settings) for face in faces]
     before_counts = (len(bm.verts), len(bm.edges), len(bm.faces))
     before_sets = _snapshot(bm)
     created_faces = []
     created_verts = []
+    clear_diameters = []
+    rim_radii = []
     try:
         for plan in plans:
-            radius = settings["radius"]
+            radius = plan["radius"]
             u, v, center = plan["u"], plan["v"], plan["center"]
             outer = plan["outer"]
             seams = []
@@ -1249,6 +1366,14 @@ def _form_hole(bm, domain, indices, settings, context):
                     points.append(vertex)
                 points.append(seams[(index + 1) % len(outer)])
                 arcs.append(points)
+            clear_radius = min(_rim_edge_distance(center, first.co, second.co)
+                               for arc in arcs for first, second in zip(arc, arc[1:]))
+            if settings["radius_mode"] == "CLEAR_RADIUS":
+                requested = settings["radius"]
+                if clear_radius < requested - max(1e-9, requested * 1e-6):
+                    raise ValueError("The stored hole rim cannot achieve the requested clear radius")
+            clear_diameters.append(2.0 * clear_radius)
+            rim_radii.append([(vertex.co - center).length for arc in arcs for vertex in arc[:-1]])
             for index in range(len(outer)):
                 polygon = [outer[index], outer[(index + 1) % len(outer)]] + list(reversed(arcs[index]))
                 face = bm.faces.new(polygon)
@@ -1284,6 +1409,13 @@ def _form_hole(bm, domain, indices, settings, context):
         raise ValueError(f"Hole boundary has {hole_edges} open edges; expected {expected_hole_edges}")
     return _base_stats(bm, before_counts, before_sets, {
         "radius": settings["radius"],
+        "requested_radius_local": settings["radius"],
+        "radius_mode": settings["radius_mode"],
+        "center_mode": settings["center_mode"],
+        "centers_local": [list(plan["center"]) for plan in plans],
+        "clear_diameters_local": clear_diameters,
+        "rim_vertex_radius_min_local": min(min(radii) for radii in rim_radii),
+        "rim_vertex_radius_max_local": max(max(radii) for radii in rim_radii),
         "segments": settings["segments"],
         "holes": len(plans),
         "hole_edges": hole_edges,
@@ -1301,6 +1433,10 @@ _HANDLERS = {
         _array_common(bm, domain, indices, settings, context, True),
     "align.axis": _align_axis,
     "align.plane": _align_plane,
+    "align.reference": lambda bm, domain, indices, settings, context:
+        _precision_alignment(bm, domain, indices, settings, context, "align.reference"),
+    "mesh.snap_symmetry": lambda bm, domain, indices, settings, context:
+        _precision_alignment(bm, domain, indices, settings, context, "mesh.snap_symmetry"),
     "support.face": _support_face,
     "support.edge": _support_edge,
     "form.lathe": _form_lathe,

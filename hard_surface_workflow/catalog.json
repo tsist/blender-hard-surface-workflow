@@ -86,6 +86,151 @@
       "tool": "align.plane",
       "topology_changes": false
     },
+    "align.reference": {
+      "context": "SINGLE_EDIT_MESH",
+      "description": "整体移动选区。点、平面、边线或方向模式只平移；FRAME 对齐指定法向和切轴，保留世界空间尺寸与滚转关系。",
+      "domains": [
+        "VERT",
+        "EDGE",
+        "FACE"
+      ],
+      "label": "按世界基准定位选区",
+      "parameters": {
+        "mode": {
+          "default": "POINT",
+          "description": "定位方式",
+          "enum": [
+            "POINT",
+            "PLANE",
+            "EDGE",
+            "DIRECTION",
+            "FRAME"
+          ],
+          "type": "string"
+        },
+        "plane_offset": {
+          "default": 0.0,
+          "description": "PLANE 模式沿世界法向的有符号偏移",
+          "max": 1000.0,
+          "min": -1000.0,
+          "type": "number"
+        },
+        "source_normal": {
+          "default": [
+            0,
+            0,
+            1
+          ],
+          "description": "FRAME 源法向（世界方向）",
+          "items": {
+            "max": 1000000000.0,
+            "min": -1000000000.0,
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "source_tangent": {
+          "default": [
+            1,
+            0,
+            0
+          ],
+          "description": "FRAME 源切轴（世界方向）",
+          "items": {
+            "max": 1000000000.0,
+            "min": -1000000000.0,
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "source_world": {
+          "default": [
+            0,
+            0,
+            0
+          ],
+          "description": "源参考点（世界坐标）",
+          "items": {
+            "max": 1000000000.0,
+            "min": -1000000000.0,
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "target_direction": {
+          "default": [
+            0,
+            0,
+            1
+          ],
+          "description": "运动方向或目标平面法向（世界方向）",
+          "items": {
+            "max": 1000000000.0,
+            "min": -1000000000.0,
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "target_end_world": {
+          "default": [
+            1,
+            0,
+            0
+          ],
+          "description": "EDGE 模式的目标边终点（世界坐标）",
+          "items": {
+            "max": 1000000000.0,
+            "min": -1000000000.0,
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "target_tangent": {
+          "default": [
+            1,
+            0,
+            0
+          ],
+          "description": "FRAME 目标切轴（世界方向）",
+          "items": {
+            "max": 1000000000.0,
+            "min": -1000000000.0,
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "target_world": {
+          "default": [
+            0,
+            0,
+            0
+          ],
+          "description": "目标点、工作面原点或目标边起点（世界坐标）",
+          "items": {
+            "max": 1000000000.0,
+            "min": -1000000000.0,
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        }
+      },
+      "tool": "align.reference",
+      "topology_changes": false
+    },
     "array.linear": {
       "context": "SINGLE_EDIT_MESH",
       "description": "复制当前选中的点、边或面，并沿局部轴等距排列；count 包含原始实例。",
@@ -502,12 +647,47 @@
       ],
       "label": "平面开圆孔",
       "parameters": {
+        "center_local": {
+          "default": [
+            0,
+            0,
+            0
+          ],
+          "description": "EXPLICIT 单个源面的孔心（本地坐标）",
+          "items": {
+            "max": 1000000000.0,
+            "min": -1000000000.0,
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "center_mode": {
+          "default": "VERTEX_MEDIAN",
+          "description": "孔心基准",
+          "enum": [
+            "VERTEX_MEDIAN",
+            "AREA_CENTROID",
+            "EXPLICIT"
+          ],
+          "type": "string"
+        },
         "radius": {
           "default": 0.25,
           "description": "圆孔半径（局部单位）",
           "max": 1000.0,
           "min": 1e-06,
           "type": "number"
+        },
+        "radius_mode": {
+          "default": "VERTEX_RADIUS",
+          "description": "半径按孔缘顶点或圆规净空解释",
+          "enum": [
+            "VERTEX_RADIUS",
+            "CLEAR_RADIUS"
+          ],
+          "type": "string"
         },
         "segments": {
           "default": 16,
@@ -599,7 +779,7 @@
     },
     "form.recess": {
       "context": "SINGLE_EDIT_MESH",
-      "description": "对选中面做内插并按法线压入；RECESS 生成垂直侧壁和平面底，COUNTERSINK 让内插环直接倾斜下压。",
+      "description": "内插后沿局部法线压入。逐面使用各自原法线，区域使用一个面区平均法线。RECESS 保留直壁，COUNTERSINK 从外圈直接过渡到内盘。",
       "domains": [
         "FACE"
       ],
@@ -1654,6 +1834,60 @@
       "upstream_operator": "mesh.looptools_space",
       "upstream_version": "4.7.7"
     },
+    "mesh.snap_symmetry": {
+      "context": "SINGLE_EDIT_MESH",
+      "coordinates_only": true,
+      "description": "按局部轴从固定侧查找镜像点，只调整选中的接收侧和可选中线点，保留两侧拓扑。",
+      "domains": [
+        "VERT",
+        "EDGE",
+        "FACE"
+      ],
+      "label": "吸附到对称位置",
+      "parameters": {
+        "center_tolerance": {
+          "default": 1e-05,
+          "description": "中线容差（局部单位，至多为匹配距离）",
+          "max": 1000.0,
+          "min": 0.0,
+          "type": "number"
+        },
+        "direction": {
+          "default": "-X",
+          "description": "以哪一侧为固定源",
+          "enum": [
+            "-X",
+            "+X",
+            "-Y",
+            "+Y",
+            "-Z",
+            "+Z"
+          ],
+          "type": "string"
+        },
+        "factor": {
+          "default": 1.0,
+          "description": "接收侧从当前位置向镜像位置插值的比例",
+          "max": 1.0,
+          "min": 0.0,
+          "type": "number"
+        },
+        "threshold": {
+          "default": 0.05,
+          "description": "镜像候选匹配距离（局部单位）",
+          "max": 1000.0,
+          "min": 1e-09,
+          "type": "number"
+        },
+        "use_center": {
+          "default": true,
+          "description": "把指定容差内的已选点吸附到中线",
+          "type": "boolean"
+        }
+      },
+      "tool": "mesh.snap_symmetry",
+      "topology_changes": false
+    },
     "native.bevel": {
       "context": "SINGLE_EDIT_MESH",
       "coordinates_only": false,
@@ -1777,6 +2011,18 @@
       "label": "桥接边环",
       "native_operator": "mesh.bridge_edge_loops",
       "parameters": {
+        "corner_vertices": {
+          "default": [],
+          "description": "要求配对的两个源角点；空数组不限定",
+          "items": {
+            "min": 0,
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 0,
+          "type": "array",
+          "uniqueItems": true
+        },
         "interpolation": {
           "default": "PATH",
           "description": "中间截面插值",
@@ -2196,6 +2442,44 @@
       "tool": "native.edge_slide",
       "topology_changes": false
     },
+    "native.flange": {
+      "context": "SINGLE_EDIT_MESH",
+      "coordinates_only": false,
+      "description": "沿已选开放自由边链为每一站指定局部 XYZ 位移，每站只生一个共用顶点。",
+      "domains": [
+        "EDGE"
+      ],
+      "effect": "topology",
+      "label": "沿开放边链续接返边",
+      "parameters": {
+        "offsets": {
+          "default": [],
+          "description": "从起点开始依次填写每站的 XYZ 位移（局部单位）",
+          "items": {
+            "max": 1000000.0,
+            "min": -1000000.0,
+            "type": "number"
+          },
+          "maxItems": 12288,
+          "minItems": 6,
+          "required": true,
+          "type": "array"
+        },
+        "start_vertex": {
+          "default": 0,
+          "description": "开放边链起点的源顶点索引",
+          "max": 199999,
+          "min": 0,
+          "required": true,
+          "type": "integer"
+        }
+      },
+      "repeat": "每次调用作用于当前选区和当前网格。拓扑操作后应按结果重建选区。",
+      "selection_expansion": false,
+      "selection_expansion_conditions": "",
+      "tool": "native.flange",
+      "topology_changes": true
+    },
     "native.flatten": {
       "context": "SINGLE_EDIT_MESH",
       "coordinates_only": true,
@@ -2330,6 +2614,16 @@
           "description": "处理边界",
           "type": "boolean"
         },
+        "use_edge_rail": {
+          "default": false,
+          "description": "区域内插时沿原边轨移点",
+          "type": "boolean"
+        },
+        "use_even_offset": {
+          "default": true,
+          "description": "沿边保持均匀偏移",
+          "type": "boolean"
+        },
         "use_individual": {
           "default": false,
           "description": "独立内插每张选中面",
@@ -2339,12 +2633,53 @@
           "default": false,
           "description": "向外扩展",
           "type": "boolean"
+        },
+        "use_relative_offset": {
+          "default": false,
+          "description": "按邻边长度缩放偏移",
+          "type": "boolean"
         }
       },
       "repeat": "每次调用作用于当前选区和当前网格。拓扑操作后应按结果重建选区。",
       "selection_expansion": false,
       "selection_expansion_conditions": "",
       "tool": "native.inset",
+      "topology_changes": true
+    },
+    "native.loop_cut_slide": {
+      "context": "SINGLE_EDIT_MESH",
+      "coordinates_only": false,
+      "description": "从单张种子四边面沿相对边追踪四边带并插入一条线。",
+      "domains": [
+        "FACE"
+      ],
+      "effect": "topology",
+      "label": "定向环切与滑移",
+      "parameters": {
+        "direction_vertices": {
+          "description": "种子面上有向起止边的两个源顶点索引",
+          "items": {
+            "min": 0,
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "required": true,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "factor": {
+          "default": 0.5,
+          "description": "沿有向边的站位比例",
+          "max": 0.9999,
+          "min": 0.0001,
+          "type": "number"
+        }
+      },
+      "repeat": "每次调用作用于当前选区和当前网格。拓扑操作后应按结果重建选区。",
+      "selection_expansion": false,
+      "selection_expansion_conditions": "",
+      "tool": "native.loop_cut_slide",
       "topology_changes": true
     },
     "native.mark_seam": {
@@ -2674,6 +3009,35 @@
       "tool": "native.space_evenly",
       "topology_changes": false
     },
+    "native.split_face": {
+      "context": "SINGLE_EDIT_MESH",
+      "coordinates_only": false,
+      "description": "沿两点之间的直线拆开单个平面凸多边形。",
+      "domains": [
+        "FACE"
+      ],
+      "effect": "topology",
+      "label": "拆分单个面",
+      "parameters": {
+        "vertices": {
+          "description": "这张面上两个不相邻的源顶点索引",
+          "items": {
+            "min": 0,
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "required": true,
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "repeat": "每次调用作用于当前选区和当前网格。拓扑操作后应按结果重建选区。",
+      "selection_expansion": false,
+      "selection_expansion_conditions": "",
+      "tool": "native.split_face",
+      "topology_changes": true
+    },
     "native.subdivide": {
       "context": "SINGLE_EDIT_MESH",
       "coordinates_only": false,
@@ -2917,11 +3281,11 @@
     },
     "vertex.connect": {
       "context": "SINGLE_EDIT_MESH",
-      "description": "按选择顺序或确定性空间顺序连接选中顶点：闭合时生成面，开放时生成边链。",
+      "description": "按选点顺序或空间排序建边链，闭合且至少三点时建面。建边保留原面。要切开已有面，请用原生连接顶点路径（J）或切割（K）。",
       "domains": [
         "VERT"
       ],
-      "label": "连接选点",
+      "label": "从选点建边或面",
       "parameters": {
         "close": {
           "default": true,
@@ -3021,6 +3385,55 @@
         "type": "object"
       },
       {
+        "additionalProperties": false,
+        "properties": {
+          "domain": {
+            "enum": [
+              "VERT",
+              "EDGE",
+              "FACE"
+            ]
+          },
+          "kind": {
+            "const": "box"
+          },
+          "maximum": {
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "minimum": {
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "space": {
+            "enum": [
+              "LOCAL",
+              "WORLD"
+            ]
+          },
+          "topology_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "domain",
+          "space",
+          "minimum",
+          "maximum"
+        ],
+        "type": "object"
+      },
+      {
         "oneOf": [
           {
             "additionalProperties": false,
@@ -3032,6 +3445,36 @@
               },
               "kind": {
                 "const": "edge_loop"
+              },
+              "sampling": {
+                "additionalProperties": false,
+                "properties": {
+                  "limit": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "phase": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "start": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "step": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "toward": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "start",
+                  "step"
+                ],
+                "type": "object"
               },
               "seed_edge": {
                 "oneOf": [
@@ -3072,6 +3515,36 @@
               },
               "kind": {
                 "const": "edge_loop"
+              },
+              "sampling": {
+                "additionalProperties": false,
+                "properties": {
+                  "limit": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "phase": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "start": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "step": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "toward": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "start",
+                  "step"
+                ],
+                "type": "object"
               },
               "seed_edges": {
                 "items": {
@@ -3121,6 +3594,36 @@
               "kind": {
                 "const": "edge_ring"
               },
+              "sampling": {
+                "additionalProperties": false,
+                "properties": {
+                  "limit": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "phase": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "start": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "step": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "toward": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "start",
+                  "step"
+                ],
+                "type": "object"
+              },
               "seed_edge": {
                 "oneOf": [
                   {
@@ -3160,6 +3663,36 @@
               },
               "kind": {
                 "const": "edge_ring"
+              },
+              "sampling": {
+                "additionalProperties": false,
+                "properties": {
+                  "limit": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "phase": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "start": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "step": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "toward": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "start",
+                  "step"
+                ],
+                "type": "object"
               },
               "seed_edges": {
                 "items": {
@@ -3209,6 +3742,36 @@
               "kind": {
                 "const": "vertex_loop"
               },
+              "sampling": {
+                "additionalProperties": false,
+                "properties": {
+                  "limit": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "phase": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "start": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "step": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "toward": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "start",
+                  "step"
+                ],
+                "type": "object"
+              },
               "seed_edge": {
                 "oneOf": [
                   {
@@ -3248,6 +3811,36 @@
               },
               "kind": {
                 "const": "vertex_loop"
+              },
+              "sampling": {
+                "additionalProperties": false,
+                "properties": {
+                  "limit": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "phase": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "start": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "step": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "toward": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "start",
+                  "step"
+                ],
+                "type": "object"
               },
               "seed_edges": {
                 "items": {
@@ -3315,6 +3908,36 @@
               "kind": {
                 "const": "face_loop"
               },
+              "sampling": {
+                "additionalProperties": false,
+                "properties": {
+                  "limit": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "phase": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "start": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "step": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "toward": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "start",
+                  "step"
+                ],
+                "type": "object"
+              },
               "seed_face": {
                 "minimum": 0,
                 "type": "integer"
@@ -3341,6 +3964,36 @@
               },
               "kind": {
                 "const": "face_loop"
+              },
+              "sampling": {
+                "additionalProperties": false,
+                "properties": {
+                  "limit": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "phase": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "start": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "step": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "toward": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "start",
+                  "step"
+                ],
+                "type": "object"
               },
               "seeds": {
                 "items": {
@@ -4594,7 +5247,11 @@
           "loop_slide",
           "mark_seam",
           "mark_sharp",
-          "harden_normals"
+          "harden_normals",
+          "edge_weight",
+          "vertex_weight",
+          "miter_outer",
+          "miter_inner"
         ],
         "BOOLEAN": [
           "object",
@@ -4866,6 +5523,10 @@
             "type": "FLOAT",
             "unit": "ROTATION"
           },
+          "edge_weight": {
+            "description": "Attribute name for edge weight",
+            "type": "STRING"
+          },
           "harden_normals": {
             "description": "Match normals of new faces to adjacent faces",
             "type": "BOOLEAN"
@@ -4892,6 +5553,25 @@
           "mark_sharp": {
             "description": "Mark beveled edges as sharp",
             "type": "BOOLEAN"
+          },
+          "miter_inner": {
+            "choices": [
+              "MITER_SHARP",
+              "MITER_ARC"
+            ],
+            "description": "Pattern to use for inside of miters",
+            "flag_array": false,
+            "type": "ENUM"
+          },
+          "miter_outer": {
+            "choices": [
+              "MITER_SHARP",
+              "MITER_PATCH",
+              "MITER_ARC"
+            ],
+            "description": "Pattern to use for outside of miters",
+            "flag_array": false,
+            "type": "ENUM"
           },
           "offset_type": {
             "choices": [
@@ -4925,6 +5605,10 @@
           },
           "vertex_group": {
             "description": "Vertex group name",
+            "type": "STRING"
+          },
+          "vertex_weight": {
+            "description": "Attribute name for vertex weight",
             "type": "STRING"
           },
           "width": {
@@ -5828,7 +6512,11 @@
           "loop_slide",
           "mark_seam",
           "mark_sharp",
-          "harden_normals"
+          "harden_normals",
+          "edge_weight",
+          "vertex_weight",
+          "miter_outer",
+          "miter_inner"
         ],
         "BOOLEAN": [
           "object",
@@ -6102,6 +6790,10 @@
             "type": "FLOAT",
             "unit": "ROTATION"
           },
+          "edge_weight": {
+            "description": "Attribute name for edge weight",
+            "type": "STRING"
+          },
           "harden_normals": {
             "description": "Match normals of new faces to adjacent faces",
             "type": "BOOLEAN"
@@ -6128,6 +6820,25 @@
           "mark_sharp": {
             "description": "Mark beveled edges as sharp",
             "type": "BOOLEAN"
+          },
+          "miter_inner": {
+            "choices": [
+              "MITER_SHARP",
+              "MITER_ARC"
+            ],
+            "description": "Pattern to use for inside of miters",
+            "flag_array": false,
+            "type": "ENUM"
+          },
+          "miter_outer": {
+            "choices": [
+              "MITER_SHARP",
+              "MITER_PATCH",
+              "MITER_ARC"
+            ],
+            "description": "Pattern to use for outside of miters",
+            "flag_array": false,
+            "type": "ENUM"
           },
           "offset_type": {
             "choices": [
@@ -6161,6 +6872,10 @@
           },
           "vertex_group": {
             "description": "Vertex group name",
+            "type": "STRING"
+          },
+          "vertex_weight": {
+            "description": "Attribute name for vertex weight",
             "type": "STRING"
           },
           "width": {
@@ -7017,8 +7732,16 @@
       "update_mode": "EXPLICIT_IN_PLACE"
     },
     "surface_project_path": {
+      "exactly_one_of": [
+        "direction",
+        "directions",
+        "radial"
+      ],
       "label": "Project a Directional Surface Path",
       "optional": [
+        "direction",
+        "directions",
+        "radial",
         "closed",
         "samples_per_span",
         "max_jump",
@@ -7028,22 +7751,26 @@
       "parameters": {
         "closed": "Join the last column or guide point back to the first without duplicating it.",
         "collection": "Destination scene collection; defaults to the anchor's single collection.",
-        "direction": "Nonzero world xyz direction. The operation normalizes it.",
+        "direction": "Fixed nonzero world xyz direction, normalized before casting.",
+        "directions": "One nonzero world xyz direction per control point. Unit directions interpolate and normalize between stations.",
         "expected_signature": "Required for updates. Use the previous operation's signature.",
         "max_distance": "Positive world ray distance in BU, measured from each origin.",
         "max_jump": "Optional world BU limit between successive hits, including the closing edge.",
         "name": "Exact output object name. For an update, keep the existing name.",
         "points": "Ordered world xyz ray origins in BU. Omit any duplicate closing point.",
+        "radial": "World {origin, axis, sense}: cast along each sample's radius toward (INWARD) or away from (OUTWARD) the axis.",
         "samples_per_span": "Uniform intervals per origin span, 1–32; default 8."
       },
       "read_only": false,
       "required": [
         "name",
         "points",
-        "direction",
         "max_distance"
       ]
     }
   },
-  "version": "0.3.1"
+  "supported_blender": [
+    "5.3.0"
+  ],
+  "version": "0.3.5"
 }

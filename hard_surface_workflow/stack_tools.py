@@ -10,7 +10,8 @@ from mathutils import Matrix, Vector
 NATIVE = {
     "BOOLEAN": ("BooleanModifier", "object operation solver use_self use_hole_tolerant"),
     "BEVEL": ("BevelModifier", "width width_pct segments affect limit_method angle_limit vertex_group "
-              "use_clamp_overlap offset_type profile loop_slide mark_seam mark_sharp harden_normals"),
+              "use_clamp_overlap offset_type profile loop_slide mark_seam mark_sharp harden_normals "
+              "edge_weight vertex_weight miter_outer miter_inner"),
     "SOLIDIFY": ("SolidifyModifier", "thickness offset use_rim use_rim_only use_even_offset solidify_mode "
                  "use_quality_normals vertex_group thickness_vertex_group"),
     "MIRROR": ("MirrorModifier", "use_axis use_bisect_axis use_bisect_flip_axis use_clip "
@@ -356,6 +357,23 @@ def _snapshot(modifier):
                          if hasattr(modifier, name)}}
 
 
+def _array_step(obj, mod):
+    """Translation of adjacent copies, in input mesh space, where the input bounds are known."""
+    if mod.use_object_offset and mod.offset_object:
+        return {"status": "measure_evaluated_copies", "reason": "Object Offset contributes a transform"}
+    step = Vector(mod.constant_offset_displace) if mod.use_constant_offset else Vector((0, 0, 0))
+    if mod.use_relative_offset:
+        upstream = list(obj.modifiers)[:obj.modifiers.find(mod.name)]
+        if obj.data.shape_keys or any(layer.show_viewport for layer in upstream) or not 0 < len(obj.data.vertices) <= 200000:
+            return {"status": "measure_evaluated_copies", "reason": "Relative Offset depends on evaluated input bounds"}
+        import numpy as np
+        coords = np.empty(3 * len(obj.data.vertices), dtype=np.float32)
+        obj.data.vertices.foreach_get("co", coords)
+        lengths = np.ptp(coords.reshape(-1, 3), axis=0)
+        step += Vector([float(length) * factor for length, factor in zip(lengths, mod.relative_offset_displace)])
+    return {"status": "computed_input_step", "local_step_bu": list(step)}
+
+
 @contextmanager
 def _transaction():
     undo = []
@@ -418,11 +436,28 @@ def _boolean_values(cutter, operation):
     return {"object": cutter, "operation": operation, "solver": "EXACT"}
 
 
+def _validate_weight_attribute(obj, modifier, settings):
+    field = "vertex_weight" if modifier.affect == "VERTICES" else "edge_weight"
+    if modifier.limit_method != "WEIGHT" or field not in settings:
+        return
+    name = getattr(modifier, field)
+    upstream = list(obj.modifiers)[:obj.modifiers.find(modifier.name)]
+    if any(layer.show_viewport or layer.show_render for layer in upstream):
+        return  # A preceding modifier can supply or convert a named attribute.
+    attribute = obj.data.attributes.get(name)
+    domain = "POINT" if field == "vertex_weight" else "EDGE"
+    if attribute is None or attribute.domain != domain or attribute.data_type != "FLOAT":
+        raise ValueError(f"Bevel weight {name!r} requires a FLOAT attribute on the {domain} domain of the input mesh")
+
+
 def _stack_add(obj, p, undo):
     values = _settings(obj, p["type"], p["settings"])
     if p["type"] == "BOOLEAN" and values.get("object") is None:
         raise ValueError("An object operand is required for a new Boolean")
-    return {"modifier": _snapshot(_append(obj, p["name"], p["type"], values, undo))}
+    modifier = _append(obj, p["name"], p["type"], values, undo)
+    if modifier.type == "BEVEL":
+        _validate_weight_attribute(obj, modifier, values)
+    return {"modifier": _snapshot(modifier)}
 
 
 def _stack_update(obj, p, undo):
@@ -436,6 +471,8 @@ def _stack_update(obj, p, undo):
     before = _snapshot(modifier)
     for key, value in settings.items():
         _set(modifier, key, value, undo)
+    if modifier.type == "BEVEL":
+        _validate_weight_attribute(obj, modifier, settings)
     return {"before": before, "modifier": _snapshot(modifier)}
 
 
@@ -673,4 +710,11 @@ def execute(obj, tool, params):
     if tool == "boolean_consumers":
         return {**evidence, "consumers": _boolean_consumers(obj)}
     with _transaction() as undo:
-        return {**evidence, **_IMPLEMENTATIONS[tool](obj, params, undo)}
+        result = _IMPLEMENTATIONS[tool](obj, params, undo)
+        mod = result.get("modifier")
+        if isinstance(mod, dict) and mod.get("type") == "ARRAY":
+            result["array_step"] = _array_step(obj, obj.modifiers[mod["name"]])
+        if isinstance(mod, dict) and mod.get("type") == "SOLIDIFY":
+            from .dimensions import local_scale_report
+            result["thickness_space"] = local_scale_report(obj)
+        return {**evidence, **result}

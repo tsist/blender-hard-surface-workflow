@@ -15,6 +15,15 @@ import bpy
 
 DOMAINS = ("VERT", "EDGE", "FACE")
 DOMAIN_LABELS = {"VERT": "顶点", "EDGE": "边", "FACE": "面"}
+SELECTOR_SOURCES = (
+    ("current", "当前 Edit 选择", "使用当前编辑模式的真实选择"),
+    ("edge_loop", "边循环 Loop", "从活动边或给定种子边追踪连续边"),
+    ("edge_ring", "边环 Ring", "沿四边面的对边追踪边环"),
+    ("vertex_loop", "顶点循环", "读取边循环上的顶点"),
+    ("face_loop", "面带", "由种子四边面及其方向边确定面带"),
+    ("indices", "显式索引列表", "直接给出元素索引"),
+    ("box", "坐标范围", "选取三轴范围内的顶点、完整边或完整面"),
+)
 ALL_CATEGORIES = "__all__"
 NO_TOOL = "__none__"
 
@@ -438,6 +447,13 @@ def _make_binding(tool_id, name, spec, annotations, used):
             annotations[prop] = bpy.props.FloatProperty(**keywords)
         elif kind == "string":
             choices = _enum_choices(spec)
+            if tool_id == "native.bevel" and name == "affect":
+                # Append rather than reorder so saved enum values keep their indices.
+                choices.append(("AUTO", "自动", "随实际顶点或边选区决定倒角作用域"))
+                default = "AUTO"
+                description = "随实际顶点或边选区决定倒角作用域，也可显式指定。"
+                spec.update(enum=[value for value, _, _ in choices],
+                            default=default, description=description)
             if choices:
                 value_default = _text(default, choices[0][0])
                 if value_default not in {choice[0] for choice in choices}:
@@ -461,7 +477,10 @@ def _make_binding(tool_id, name, spec, annotations, used):
             null_default=null_default, spec=spec,
         )
 
-    if kind == "array":
+    # FloatProperty stores float32. World anchors need to carry the typed
+    # decimal coordinates through to the core's storage precision check.
+    world_anchor = tool_id == "align.reference" and name in {"source_world", "target_world", "target_end_world"}
+    if kind == "array" and not world_anchor:
         choices = _enum_choices(spec)
         items_spec = spec.get("items")
         if not choices and isinstance(items_spec, dict):
@@ -530,12 +549,12 @@ def _make_binding(tool_id, name, spec, annotations, used):
                 items=item_bindings, spec=spec,
             )
 
-    # Nested structures and genuinely large/variable arrays use a JSON field.
+    # JSON preserves precise coordinates and variable array shapes.
     prop = _next_prop(base, used)
     json_text = _json_default(default)
     annotations[prop] = bpy.props.StringProperty(
         name=label,
-        description="{}（特殊结构或大数组，以 JSON 文本绑定）。".format(description),
+        description="{}（以 JSON 文本输入）。".format(description),
         default=json_text,
     )
     return Binding(
@@ -614,14 +633,7 @@ def _make_settings_class(param_class):
         "selector_source": bpy.props.EnumProperty(
             name="选区来源",
             description="决定如何把当前编辑选择转换为 core 选区。",
-            items=(
-                ("current", "当前 Edit 选择", "使用当前编辑模式的真实选择"),
-                ("edge_loop", "活动边 Loop", "从活动边（或唯一选中边）扩展边循环"),
-                ("edge_ring", "活动边 Ring", "从活动边（或唯一选中边）扩展边环"),
-                ("vertex_loop", "活动边顶点 Loop", "由边循环取得顶点"),
-                ("face_loop", "活动面 + 方向边", "活动面与显式方向边索引决定面循环"),
-                ("indices", "显式索引列表", "直接给出稳定元素索引"),
-            ),
+            items=SELECTOR_SOURCES,
             default="current",
             update=_on_selector_update,
         ),
@@ -673,6 +685,22 @@ def _make_settings_class(param_class):
             default="",
             update=_on_selector_update,
         ),
+        "box_domain": bpy.props.EnumProperty(
+            name="元素", items=[(key, label, "") for key, label in DOMAIN_LABELS.items()],
+            default="VERT", update=_on_selector_update,
+        ),
+        "box_space": bpy.props.EnumProperty(
+            name="坐标", items=(("LOCAL", "物体局部", "源笼坐标"), ("WORLD", "世界", "应用对象世界变换后的坐标")),
+            default="LOCAL", update=_on_selector_update,
+        ),
+        "box_minimum": bpy.props.FloatVectorProperty(name="XYZ 下界", size=3, update=_on_selector_update),
+        "box_maximum": bpy.props.FloatVectorProperty(name="XYZ 上界", size=3, update=_on_selector_update),
+        "sample_path": bpy.props.BoolProperty(name="沿路径取样", update=_on_selector_update),
+        "sample_start": bpy.props.IntProperty(name="起点索引", min=-1, default=-1, update=_on_selector_update),
+        "sample_toward": bpy.props.IntProperty(name="下一站索引", min=-1, default=-1, update=_on_selector_update),
+        "sample_step": bpy.props.IntProperty(name="步长", min=1, default=2, update=_on_selector_update),
+        "sample_phase": bpy.props.IntProperty(name="起始偏移", min=0, update=_on_selector_update),
+        "sample_limit": bpy.props.IntProperty(name="最大遍历站数", min=0, update=_on_selector_update),
         "repeat": bpy.props.IntProperty(
             name="重复次数",
             description="传给 core.execute 的 repeat 参数。",
@@ -850,7 +878,10 @@ def collect_params(settings, tool_id):
             if binding.null_prop and getattr(params, binding.null_prop):
                 result[binding.name] = None
             else:
-                result[binding.name] = getattr(params, binding.prop)
+                value = getattr(params, binding.prop)
+                if tool_id == "native.bevel" and binding.name == "affect" and value == "AUTO":
+                    continue
+                result[binding.name] = value
         elif binding.kind == "flags":
             result[binding.name] = [
                 value for prop, value, _label, _description in binding.choices

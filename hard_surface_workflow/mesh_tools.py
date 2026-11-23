@@ -160,7 +160,8 @@ TOOLS = {tool["tool"]: tool for tool in (
             "smoothness": unit(1.0, "中间截面平滑度"),
             "profile_shape_factor": number(0.0, "中间截面轮廓尺寸变化", -1.0, 1.0),
             "profile_shape": text_option("SMOOTH", "中间截面的分布", "SMOOTH", "SPHERE", "ROOT",
-                                         "INVERSE_SQUARE", "SHARP", "LINEAR")}),
+                                         "INVERSE_SQUARE", "SHARP", "LINEAR"),
+            "corner_vertices": {**index_array("要求配对的两个源角点；空数组不限定", 2), "minItems": 0}}),
     native("grid_fill", "网格填充", "从所选合法周界生成四边面填充。span=0 使用原生自动跨度。",
            ("EDGE",), True, "fill_grid",
            {"span": integer(0, "格宽，0 由 Blender 决定", 0, 10000),
@@ -197,7 +198,23 @@ TOOLS = {tool["tool"]: tool for tool in (
             "depth": number(0.0, "法线深度", -1000.0, 1000.0),
             "use_individual": boolean(False, "独立内插每张选中面"),
             "use_outset": boolean(False, "向外扩展"),
-            "use_boundary": boolean(True, "处理边界")}),
+            "use_boundary": boolean(True, "处理边界"),
+            "use_even_offset": boolean(True, "沿边保持均匀偏移"),
+            "use_relative_offset": boolean(False, "按邻边长度缩放偏移"),
+            "use_edge_rail": boolean(False, "区域内插时沿原边轨移点")}),
+    native("split_face", "拆分单个面", "沿两点之间的直线拆开单个平面凸多边形。",
+           ("FACE",), True, None,
+           {"vertices": index_array("这张面上两个不相邻的源顶点索引", 2, required=True)}),
+    native("loop_cut_slide", "定向环切与滑移", "从单张种子四边面沿相对边追踪四边带并插入一条线。",
+           ("FACE",), True, None,
+           {"direction_vertices": index_array("种子面上有向起止边的两个源顶点索引", 2, required=True),
+            "factor": number(0.5, "沿有向边的站位比例", 0.0001, 0.9999)}),
+    native("flange", "沿开放边链续接返边", "沿已选开放自由边链为每一站指定局部 XYZ 位移，每站只生一个共用顶点。",
+           ("EDGE",), True, None,
+           {"start_vertex": {**integer(0, "开放边链起点的源顶点索引", 0, 199999), "required": True},
+            "offsets": {**option("array", [], "从起点开始依次填写每站的 XYZ 位移（局部单位）",
+                                  items={"type": "number", "min": -1000000.0, "max": 1000000.0}),
+                        "minItems": 6, "maxItems": 12288, "required": True}}),
     native("mark_sharp", "设定锐边", "保存或清除选中边的锐边属性。",
            ("EDGE",), False, "mark_sharp", {"clear": boolean(False, "清除锐边标记")}, effect="attributes"),
     native("mark_seam", "设定 UV 缝", "保存或清除选中边的 UV 缝属性。",
@@ -306,7 +323,9 @@ def _parameters(spec, params):
             for item in value:
                 if (type(item) not in python_types[item_rule["type"]] or
                         ("enum" in item_rule and item not in item_rule["enum"]) or
-                        ("min" in item_rule and item < item_rule["min"])):
+                        (item_rule["type"] == "number" and not math.isfinite(item)) or
+                        ("min" in item_rule and item < item_rule["min"]) or
+                        ("max" in item_rule and item > item_rule["max"])):
                     raise ValueError(f"{name} contains an invalid {item_rule['type']} value")
             if rule.get("uniqueItems") and len(set(value)) != len(value):
                 raise ValueError(f"{name} must not contain duplicate values")
@@ -364,6 +383,8 @@ def _native(spec, domain, selection, settings):
     if tool == "native.grid_fill" and settings["span"] == 0:
         # Omitting the property leaves span unset so Blender computes it.
         del call["span"]
+    if tool == "native.bridge":
+        call.pop("corner_vertices")
     return "FINISHED" if "FINISHED" in op("EXEC_DEFAULT", **call) else "CANCELLED"
 
 
@@ -631,7 +652,7 @@ def _offset_edges(obj, mesh, selected, settings):
     bmesh.update_edit_mesh(obj.data, loop_triangles=True, destructive=mode != "move")
 
 
-def run(tool, params=None, *, allow_expansion=False, protected_indices=()):
+def run(tool, params=None, *, allow_expansion=False, protected_indices=(), staged=False):
     """Run once against the live selection and return a JSON-safe status."""
     spec = describe(tool)
     settings = _parameters(spec, params)
@@ -639,6 +660,12 @@ def run(tool, params=None, *, allow_expansion=False, protected_indices=()):
     if tool == "native.bevel" and "affect" not in (params or {}):
         # The documented default follows the current single select mode.
         settings["affect"] = "VERTICES" if domain == "VERT" else "EDGES"
+    if tool in {"native.inset", "native.bridge", "native.split_face", "native.loop_cut_slide", "native.flange"}:
+        if not staged and (tool != "native.bridge" or settings["corner_vertices"]):
+            raise RuntimeError(f"{tool} requires the common core's staged edit mesh")
+        from . import mesh_precision_tools
+        return mesh_precision_tools.run(tool, obj, mesh, selection, settings,
+                                        lambda: _native(spec, domain, selection, settings))
     status = "FINISHED"
     if tool == "native.smooth_normal":
         _smooth_normal(obj, mesh, settings)
