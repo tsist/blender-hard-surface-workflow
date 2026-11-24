@@ -14,7 +14,7 @@ The builder verifies every dependency member against `dependencies.json` and pre
 
 ## Modeling skill
 
-The [hard surface modeling skill](skills/blender-hard-surface-modeling/SKILL.md) covers subdivision cages, curved surfaces, native operators, geometry checks, and save and recovery procedures. It includes the step-by-step guides, illustrated references, and distilled case studies through tier four. Install the skill by copying its complete directory to your agent's skill directory.
+The [hard surface modeling skill](skills/blender-hard-surface-modeling/SKILL.md) covers upfront modeling plans and five-tier part breakdown methodology, three modeling routes (full-quad Sub-D cages, mid-poly bevel + weighted normals, and hybrid assemblies), three blockout strategies, Blender 5.3 golden modifier stacks, assembly interfaces, and in-process wireframe/highlight checks aligned with G1-G4 white-model review. It ships 8 focused craft guides, 22 visual comparison plates, and 2 precision rewind planners. Install the skill by copying its complete directory to your agent's skill directory.
 
 The native workflows and extension panel use Blender 5.3.0. Examples marked `blenderctl` and the two rewind planners require the matching workspace CLI 0.91.0. The older [public Blender CLI releases](https://github.com/tsist/blenderctl/releases) do not provide those 0.3.6 routes.
 
