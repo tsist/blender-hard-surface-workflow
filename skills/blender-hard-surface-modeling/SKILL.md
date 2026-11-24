@@ -75,7 +75,7 @@ $ctl = './blenderctl.ps1'
 
 ## 交给下游
 
-白模定稿前，先按 [blender-modeling-review](https://github.com/tsist/blender-modeling-review/SKILL.md) 的 G1–G4 跑一遍只读体检（`model inspect --qa-profile render` 或 `game` + `commercial_qa_scorecard.py`），确保冷重开零报错、切刀全关 `hide_render`、米制 `-Y` 朝向、缩放归 `1,1,1`、单一根集合零默认名、全四边零 N-gon 且高光顺滑，再送独立审核签认并呈交用户做 **审看①（白模）**。
+白模定稿前，先按 [blender-modeling-review](https://github.com/tsist/blender-modeling-review/blob/main/SKILL.md) 的 G1–G4 跑一遍只读体检（`model inspect --qa-profile render` 或 `game` + `commercial_qa_scorecard.py`），确保冷重开零报错、切刀全关 `hide_render`、米制 `-Y` 朝向、缩放归 `1,1,1`、单一根集合零默认名、全四边零 N-gon 且高光顺滑，再送独立审核签认并呈交用户做 **审看①（白模）**。
 
 交付物固定带齐四项：
 

@@ -68,7 +68,7 @@
 
 ## 四、送审前的 G1–G4 自检清单
 
-准备提交 [blender-modeling-review](https://github.com/tsist/blender-modeling-review/SKILL.md) 独立盲审和用户审看①之前，对着下面四道门逐项过一遍，省去来回打回：
+准备提交 [blender-modeling-review](https://github.com/tsist/blender-modeling-review/blob/main/SKILL.md) 独立盲审和用户审看①之前，对着下面四道门逐项过一遍，省去来回打回：
 
 ```powershell
 $ctl    = './blenderctl.ps1'

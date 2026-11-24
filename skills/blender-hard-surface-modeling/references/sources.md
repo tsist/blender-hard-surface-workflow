@@ -28,9 +28,9 @@
 - **公共 CLI 会话与预览契约**：`docs/cli/workflows/session-and-preview.md`
 - **协作技能**：
   - [blender-work-methodology](https://github.com/tsist/blender-ai-workflow/blob/main/skills/blender-work-methodology/SKILL.md) 与 [建模部门卡](https://github.com/tsist/blender-ai-workflow/blob/main/skills/blender-work-methodology/references/departments/modeling.md)
-  - [blender-modeling-reference](https://github.com/tsist/blender-modeling-reference/SKILL.md)（前期参考图包、尺寸表与一致性核对单）
-  - [simready-hard-surface-research](https://github.com/tsist/simready-hard-surface-research/SKILL.md)（工业机械 OpenUSD 结构拆解与枢轴参考）
-  - [blender-modeling-review](https://github.com/tsist/blender-modeling-review/SKILL.md)（L0–L3 四档商业标尺与 G1–G5 五级审核红线）
+  - [blender-modeling-reference](https://github.com/tsist/blender-modeling-reference/blob/main/SKILL.md)（前期参考图包、尺寸表与一致性核对单）
+  - [simready-hard-surface-research](https://github.com/tsist/simready-hard-surface-research/blob/main/SKILL.md)（工业机械 OpenUSD 结构拆解与枢轴参考）
+  - [blender-modeling-review](https://github.com/tsist/blender-modeling-review/blob/main/SKILL.md)（L0–L3 四档商业标尺与 G1–G5 五级审核红线）
   - [blender-cli](https://github.com/tsist/blenderctl/blob/main/skills/blender-cli/SKILL.md)（公共 CLI 作业、依赖核验与事务发布）
 - **共享 Wiki 对应词条**：
   - `procedures/blender-hard-surface-planning-and-part-breakdown.md`（建模计划与资产分件方法论）
