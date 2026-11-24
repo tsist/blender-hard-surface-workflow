@@ -1,0 +1,6 @@
+interface:
+  display_name: "Blender Hard Surface Modeling"
+  short_description: "Blender Hard Surface Modeling for Blender 5.3 workflows"
+  default_prompt: "Use $blender-hard-surface-modeling to run this Blender workflow."
+policy:
+  allow_implicit_invocation: true

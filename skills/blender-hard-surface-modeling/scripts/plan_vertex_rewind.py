@@ -17,10 +17,7 @@ from tempfile import NamedTemporaryFile
 import bpy
 
 sys.dont_write_bytecode = True
-WORKSPACE = Path(os.environ.get("BLENDERCTL_WORKSPACE", Path(__file__).resolve().parents[4])).resolve()
-if not (WORKSPACE / "tools/blenderctl/protocol.py").is_file():
-    raise SystemExit("Set BLENDERCTL_WORKSPACE to the matching blenderctl 0.91.0 source workspace")
-sys.path.insert(0, str(WORKSPACE / "tools/blenderctl"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tools" / "blenderctl"))
 from model_contract import normalize
 from modeling import bounded, topology
 from protocol import Failure, SCHEMA, digest

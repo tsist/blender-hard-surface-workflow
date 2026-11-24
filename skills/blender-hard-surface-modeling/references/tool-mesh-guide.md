@@ -1,22 +1,20 @@
 # 网格工具操作指南
 
-命令实例需要匹配的工作区版 Blender CLI 0.91.0。可先使用 Blender 5.3.0 原生操作和已安装插件的面板。
-
 适用于 Hard Surface Workflow **0.3.5**、公共 CLI **0.91.0** 和 Blender **5.3.0**。本页覆盖工作台目录中 62 项 `mesh_tools`。修改器、快照和求值测量见[工具工作台](tool-workbench.md)。
 
 ```powershell
-& '<配套工作区中的 blenderctl.ps1>' --blender-version 5.3.0 model flow-tools --tool native.split_face
+& './blenderctl.ps1' --blender-version 5.3.0 model flow-tools --tool native.split_face
 ```
 
 在工作台执行时，进入**单一目标网格的编辑模式**，在源笼上使用工具规定的点、边或面域。先预览选择及保护区，从侧视确认隐藏侧或镜像显示。批量可用 `model prepare` 在工作副本中提交 `mesh.flow`。用 `model panel-controls` 重放已保存的面板请求时写 `"edition": "0.3.5"`。数组里的索引均来自当前源笼。拓扑指纹可检查索引所对应的连接结构，同一指纹下点还可能移动。重开或拓扑变化后按实体地标复核选区和参数点。
 
-`protect` 接受一个或一组选择器。默认 `allow_expansion=false` 时，选区外点的保留和位置受保护，拓扑工具还检查选区外面的连接与绕序。允许工具经邻环扩展前，另圈定必保的点、边和面。属性命令和只选取命令各有相应检查。下文除标注世界坐标或角度外，长度采用对象局部 Blender 单位。对象有非均匀缩放时，局部圆或等距需要在成品坐标中再量一遍。[选取步骤](mesh-flow.md)
+`protect` 接受一个或一组选择器。默认 `allow_expansion=false` 时，选区外点的保留和位置受保护，拓扑工具还检查选区外面的连接与绕序。允许工具经邻环扩展前，另圈定必保的点、边和面。属性命令和只选取命令各有相应检查。下文除标注世界坐标或角度外，长度采用对象局部 Blender 单位。对象有非均匀缩放时，局部圆或等距需要在成品坐标中再量一遍。`入口和版本` · [选取步骤](mesh-flow.md) · `完整参数目录`
 
 ## 选取
 
 | 工具 ID | 输入、参数与验收 |
 | --- | --- |
-| `native.select_loop` | 边模式选可辨的种子边。`delimit_edge_loop` 可组合 `SEAM`、`SHARP`、`NGONS`、`INNER_CORNERS`、`OUTER_CORNERS`。检查新增高亮及每条链的终点。0.3.5 工作台执行器可能在操作后重新套用旧预览。本版在 GUI 优先使用原生环选或「硬表面选取」菜单，并在编辑模式查实际选区。|
+| `native.select_loop` | 边模式选可辨的种子边。`delimit_edge_loop` 可组合 `SEAM`、`SHARP`、`NGONS`、`INNER_CORNERS`、`OUTER_CORNERS`。检查新增高亮及每条链的终点。0.3.5 工作台执行器可能在操作后重新套用旧预览。本版在 GUI 优先使用原生环选或「硬表面选取」菜单，并在编辑模式查实际选区。`复现` |
 
 ## 对齐与保形
 
@@ -51,7 +49,7 @@
 
 | 工具 ID | 输入、参数与验收 |
 | --- | --- |
-| `looptools.gstretch` | 选跟随引导的网格链，给 `strokes` 或 `guide` 之一。显式笔划为多条开放 XYZ 折线，`stroke_space=WORLD/LOCAL`。具名项形如 `{"source":"annotation","name":"Guide","layer":"Line","frame":1}`，也可用 `grease_pencil`；严格按此帧读。选区为空且有引导时，可按 `conversion` 及距离或点数参数生成边。跟随已有几何用 `method=project/irregular/regular`。查轨迹、端点和生成段数，`delete_strokes` 固定为 `false`。具名 Annotation 须为 3D，带父级的 Grease Pencil 图层应改用显式世界折线。 |
+| `looptools.gstretch` | 对一条已选开放链，可沿其首尾连线拉伸。需指定路线时给 `strokes` 或 `guide` 之一。显式笔划为开放 XYZ 折线，`stroke_space=WORLD/LOCAL`。具名项形如 `{"source":"annotation","name":"Guide","layer":"Line","frame":1}`，也可用 `grease_pencil`；严格按此帧读。 | 在所需坐标系锁定应保护的轴。0.3.5 的 5.3.0 短链小样用 `regular`、锁 Y/Z 实测 X 四段等距，Y/Z、邻线和面连接保持。已有选中链按 `method=project/irregular/regular` 求位置，空选区有引导时才按 `conversion` 生成新边。查轨迹、端点和段数。`delete_strokes` 固定为 `false`。具名 Annotation 须为 3D，带父级的 Grease Pencil 图层应改用显式世界折线。 `实际短链复验` |
 | `looptools.remove_annotation` | 以辅助网格建立公共 `mesh.flow` 上下文，按 Annotation 数据块名 `name`、精确 `layer/frame` 和现有 `expected_stroke_count` 定位。获得清理授权后填 `confirm=true`。图层须解锁、数据须未共享。读回该帧笔划数，并抽查相邻帧。 |
 | `looptools.remove_gpencil` | 同样使用辅助网格上下文，`name` 填当前场景的 Grease Pencil **对象名**。给准确图层、帧和现有笔划数，获授权后 `confirm=true`。图层须解锁，数据块和 Drawing 的共享都会阻止清理。读回目标帧和邻帧，确认仅清理指定 Drawing。 |
 
@@ -63,12 +61,14 @@
 | `native.split_face` | 面模式只选**一张凸平面多边形**，`vertices` 给同面两个互不相邻的源点。结果应沿直线产生两个子面，新刀边恰由两面共享。检查面朝向及旧周界。凹面、非平面、跨多个面或没有两个既有端点时回到原生 Knife。 |
 | `native.loop_cut_slide` | 选一张种子四边面，`direction_vertices=[a,b]` 指向该面的一条边，`factor` 从 a 到 b 量站位。单次调用沿整条四边面带走，无需设置 `allow_expansion`。核贯穿路径、新环站位和两侧截面。隐藏面、三角或非流形连接、与显式保护冲突都会阻断。 |
 | `native.subdivide` | 选要局部加密的边或面，`number_cuts` 为每边增切数，`smoothness` 控新增点，`quadcorner` 与 `ngon` 管四边面切角及 N 边面。核面型、相邻面是否被改接、关键原点位置。只需一条贯通支撑环时优先核对 Loop Cut 路径。 |
-| `native.inset` | 选面区，`thickness` 设边宽、`depth` 设法向高差；`use_individual` 区分逐面与区域，`use_edge_rail` 用于区域内插。可配 `use_even_offset`、`use_boundary`、`use_outset`、`use_relative_offset`。从斜视和剖面检查角部净宽、边界及正反面；跨窄面时查自交。 |
+| `native.inset` | 选面区，`thickness` 设边宽、`depth` 设法向高差；`use_individual` 区分逐面与区域，`use_edge_rail` 用于区域内插。可配 `use_even_offset`、`use_boundary`、`use_outset`、`use_relative_offset`。 | 需要内插区接到镜像中线时，原半笼的中线边须属于真实开边，再试关闭 `use_boundary`。同一 3 mm 小样关闭时内插选面到 X=0，开启时退至 X=3 mm，完整镜像多两面。检查斜视、净宽、接线和完整栈，跨窄面时查自交。 `开边内插实测` |
 | `support.face` | 选需加卡线的连通面区或明确的逐面选区。`width` 是每圈局部内插距离，`count` 为圈数，`individual` 决定逐面。读一圈实际宽度，看转角和细分反光。连续内插在窄角可能挤压或折回。 |
 | `support.edge` | 边模式选实际承托折线，`width` 定局部偏移，`clamp_overlap` 控重叠。重点比对倒角两侧、交汇的三条折线及求值轮廓。开启限宽后应量实际宽度。 |
 | `native.bevel` | 选折边或角点，`affect` 省略时公共核心按点或边域推断；`offset_type` 定义宽度，`PERCENT` 使用 `offset_pct`，其他长度型用 `offset`。再设 `segments`、`profile`、内外角接法及法线、缝或锐边选项。量受 `clamp_overlap` 限制后的实际宽度，看三角会合、面序与阴影。 |
 | `edit_mesh_tools.offset_edges` | 选方向一致的开放边链或闭边界，`geometry_mode=offset/extrude/move`，`width/depth` 为有符号局部距离，`follow_face`、`edge_rail` 和 `edge_rail_only_end` 决定方向和端点，按需要核对 `mirror_modifier` 与 `threshold`。查自由边、接缝、拐角自交以及每个截面的实际偏移。 |
 | `native.flange` | 选一条自由开放边链，每条边恰连一张可见原面。`start_vertex` 取链的一端，`offsets` 填扁平数组 `[dx0,dy0,dz0,dx1,dy1,dz1,…]`，每站一个非零局部位移。逐站确认面带共用原边与横边，并追踪剩余自由边。检查错位、自交及新面的 UV。 |
+
+量产车外板倒角先核对象的非均匀缩放，再按世界毫米量有效偏移。Model Y 的 90° 返边小样用 `OFFSET`、四段和 3 mm，单位缩放时两向均为 3 mm。对象缩放 `(2, 0.5, 1)` 时，同一输入得到 6 和 1.5 mm。返边只留 1.8 mm 时，开启 `clamp_overlap` 后回执仍为 `FINISHED`，实际两向均约 1.8 mm。把偏移、缝净宽和板厚分开测，在尖角和三件交汇另取截面。 `Blender 5.3.0 四段倒角实测`
 
 ## 补片、配对、开孔与生成
 
@@ -105,7 +105,7 @@
 
 | 工具 ID | 输入、参数与验收 |
 | --- | --- |
-| `native.edge_bevel_weight` | 选倒角修改器应读取的边。`value` 是 `0–1`，0 清除。回读 `bevel_weight_edge`，并在修改器用 Weight 限制时观察求值轮廓。W975 冷开将同一组选边改成仅有 Mark Sharp 后，倒角求值面数回到源笼值。用实际面数、真线框和局部条光确认作用范围。|
+| `native.edge_bevel_weight` | 选倒角修改器应读取的边。`value` 是 `0–1`，0 清除。回读 `bevel_weight_edge`，并在修改器用 Weight 限制时观察求值轮廓。W975 冷开将同一组选边改成仅有 Mark Sharp 后，倒角求值面数回到源笼值。用实际面数、真线框和局部条光确认作用范围。 `边权对照` |
 | `native.edge_crease` | 选细分应加折痕的边。`value` 是 `0–1`，0 清除。回读 `crease_edge`，核细分级别下角、端点和高光。 |
 | `native.flip_normals` | 选方向需要反转的面。查选中面绕序、邻面相反共享边方向及其内外可见面。 |
 | `native.recalc_normals` | 选要统一朝向的一组面，`inside` 指朝内。闭壳查面朝向和剖面；开壳、断片或混合组件还需按成品的正面方向逐段核对。 |
@@ -116,7 +116,7 @@
 
 ## 本地复验入口和案例
 
-- 0.3.5 的 Blender 5.3.0 冷开回执覆盖安装包、拆面和 GStretch。本页其它工具应按实际选区、回执和成品剖面核查。
-- 上一版 0.3.4 在 Blender 5.3.0 的拓扑、源选择器、精度工具记录可用来重建试件。
-- 以源笼、实际细分和截面一起判断可编辑性。下面的案例给出网格和对照图。
-- LoopTools、引导线的清理范围、孔与沉台的已有试件可用于构造自己的失败样本。部分为旧版历史记录。
+- 0.3.5 的 Blender 5.3.0 冷开回执覆盖安装包、拆面和 GStretch。本页其它工具应按实际选区、回执和成品剖面核查。`本版复验`
+- 上一版 0.3.4 在 Blender 5.3.0 的拓扑、源选择器、精度工具记录可用来重建试件。`拓扑结果` · `CLI 冷开` · `定位复验`
+- 以源笼、实际细分和截面一起判断可编辑性。下面的案例给出网格和对照图。`基础连接` · `偏位台肩` · `单环插线` · `分段翻边` · `翻边厚度` · `减线`
+- LoopTools、引导线的清理范围、孔与沉台的已有试件可用于构造自己的失败样本。部分为旧版历史记录。`LoopTools` · `引导线` · `成形工具` · `交接流程`

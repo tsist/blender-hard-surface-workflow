@@ -8,10 +8,7 @@ import sys
 import tempfile
 
 sys.dont_write_bytecode = True
-WORKSPACE = Path(os.environ.get("BLENDERCTL_WORKSPACE", Path(__file__).resolve().parents[4])).resolve()
-if not (WORKSPACE / "tools/blenderctl/protocol.py").is_file():
-    raise SystemExit("Set BLENDERCTL_WORKSPACE to the matching blenderctl 0.91.0 source workspace")
-TOOLS = WORKSPACE / "tools"
+TOOLS = Path(__file__).resolve().parents[4] / "tools"
 sys.path[:0] = [str(TOOLS / "blenderctl"), str(TOOLS)]
 from protocol import Failure, digest, validate
 
