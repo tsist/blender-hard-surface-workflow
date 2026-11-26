@@ -7767,10 +7767,54 @@
         "points",
         "max_distance"
       ]
+    },
+    "surface_sweep": {
+      "label": "Sweep a Section Along a Surface",
+      "optional": [
+        "collection",
+        "expected_preview_signature",
+        "expected_signature",
+        "preview",
+        "sampling_mm"
+      ],
+      "parameters": {
+        "collection": "Destination scene collection for creation.",
+        "dimensional_tolerance_mm": "Maximum absolute dimensional error in a section.",
+        "expected_preview_signature": "Bind a commit to the recipe and shell from a previous preview.",
+        "expected_signature": "Current signature required when updating a managed mesh.",
+        "gap_mm": "Nominal bottom/outer-wall offset along the local outward axis.",
+        "gap_tolerance_mm": "Maximum absolute error in the installation gap.",
+        "max_distance_mm": "Maximum projection distance.",
+        "max_jump_mm": "Maximum separation between adjacent projected samples.",
+        "max_normal_angle_deg": "Maximum normal angle from the installation normal or previous hit.",
+        "min_clearance_mm": "Minimum acceptable distance to the evaluated shell.",
+        "name": "Managed output mesh object name.",
+        "outward_normal": "Reference normal of the admissible installation side.",
+        "preview": "Return validation report without mutating the scene.",
+        "profile": "RECTANGLE uses width_mm, height_mm. PIPE uses outer_diameter_mm, wall_mm, and optional even sides.",
+        "ray_direction": "Nonzero world projection direction.",
+        "sampling_mm": "Maximum distance between projected guide samples (default 1.5).",
+        "stations": "Ordered unique world-mm station records. Each has name, position_mm, locked, and optional corner (ROUND, STRAIGHT, MITER), radius_mm, or miter_limit_deg."
+      },
+      "read_only": false,
+      "required": [
+        "dimensional_tolerance_mm",
+        "gap_mm",
+        "gap_tolerance_mm",
+        "max_distance_mm",
+        "max_jump_mm",
+        "max_normal_angle_deg",
+        "min_clearance_mm",
+        "name",
+        "outward_normal",
+        "profile",
+        "ray_direction",
+        "stations"
+      ]
     }
   },
   "supported_blender": [
     "5.3.0"
   ],
-  "version": "0.3.6"
+  "version": "0.3.7"
 }

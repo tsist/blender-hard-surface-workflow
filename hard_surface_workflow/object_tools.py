@@ -1,11 +1,13 @@
 """Public object-mode dispatch shared by the CLI and catalog exporter."""
 import bpy
 from . import draw_tools, fillet_tools, profiles, reference_contour, seat_tools, shell_tools, stack_tools, surface_tools
+from . import surface_sweep
 
 
 def catalog():
     result = {**stack_tools.catalog(), **profiles.catalog(), **shell_tools.catalog(), **reference_contour.catalog(),
-              **surface_tools.catalog(), **seat_tools.catalog(), **fillet_tools.catalog(), **draw_tools.catalog()}
+              **surface_tools.catalog(), **surface_sweep.catalog(), **seat_tools.catalog(),
+              **fillet_tools.catalog(), **draw_tools.catalog()}
     settings = {}
     for kind, (class_name, _) in stack_tools.NATIVE.items():
         properties = getattr(bpy.types, class_name).bl_rna.properties
@@ -33,6 +35,8 @@ def catalog():
 
 
 def execute(obj, tool, params):
+    if tool == surface_sweep.TOOL:
+        return surface_sweep.execute(obj, tool, params)
     if tool == draw_tools.TOOL:
         return draw_tools.execute(obj, tool, params)
     if tool in surface_tools.TOOLS:

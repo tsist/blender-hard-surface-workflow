@@ -2,20 +2,22 @@
 name: blender-hard-surface-modeling
 description: 在 Blender 中规划硬表面建模方案、按制造与装配逻辑拆分零件，并通过全四边控制笼或加权法线中模完成可编辑硬表面白模。接到工业产品、家电、工具、机械装备、载具或精确装配壳体的从零建模、外部候选重建与局部返修时使用。
 metadata:
-  version: "1.0.0"
+  version: "1.1.0"
 ---
 
 # Blender 硬表面建模
 
 本技能属于 [建模部门](https://github.com/tsist/blender-ai-workflow/blob/main/skills/blender-work-methodology/references/departments/modeling.md)，负责把参考图和结构需求变成比例准确、分件合理、面流顺滑、留足改型余地的可编辑硬表面白模。硬表面好不好改、高光顺不顺，八成在动第一条边之前就已经决定：先把零件怎么拆、每件走哪条路线、怎么起坯定死，再上控制笼和修改器栈。
 
-所有已保存 `.blend` 的后台读写、几何审计与冷重开都通过公共入口 `blenderctl` 完成，查当前工具入口先运行：
+按所用 Blender 和扩展版本检查工具入口。使用配套 `blenderctl` 时，从该版本的帮助核对可用的后台写入、几何审计和预检动作。下文的贴面扫掠可以在 Blender 面板中直接完成。
 
-```powershell
-$ctl = './blenderctl.ps1'
-& $ctl discover --product hard-surface
-& $ctl model flow-tools
-```
+## 用命名站位做贴面扫掠
+
+Hard Surface Workflow 0.3.7 在 Windows Blender 5.3.0（验收 build `02f0899d78e3`）上提供 `surface_sweep`。给同一安装面的射线起点、截面和净空后，工具会生成独立胶条、饰条或有壁厚的开口圆管。站位采用世界毫米，按走向命名。锁定首尾及局改边界，在锁站附近保留固定切向。
+
+对象模式选择母壳，在 Blender Text Editor 建立配方并在 **N → Hard Surface → 贴面扫掠** 选择该 Text。预览后核对截面与净空，再提交。需要改型时，选择一个未锁定的命名 Empty，移动后检查候选线框。提交后保留新站位，取消则恢复已提交位置。 [逐步复现、参数与验收](references/surface-sweep.md) · [可直接粘贴的矩形配方](references/surface-sweep-example.json)
+
+有相应动作的 CLI 版本也可使用同一配方，预检后用回执签名绑定提交。按已安装版本的帮助确认入口。
 
 ## 怎么做
 
@@ -98,6 +100,7 @@ $ctl = './blenderctl.ps1'
 
 ## 参考
 
+- [贴面扫掠](references/surface-sweep.md) — 命名站位、截面、净空、视口提交和局改
 - [建模计划与资产分件](references/planning-and-part-breakdown.md) — 分级计划门槛、`plan.md` 模板、五级分件判据、起坯三路线、大纲装配树与公倍数分段
 - [控制笼布线与卡线](references/topology-and-support-loops.md) — 全四边面流、两族控制线、卡线距与变宽圆角、极点退让、减线与渐消棱
 - [曲面开孔、相贯与翻边](references/cutouts-and-flanges.md) — 柱面/双曲开孔、斜交相贯、翻边内偏净空、跨折凹槽与展开/代理成形

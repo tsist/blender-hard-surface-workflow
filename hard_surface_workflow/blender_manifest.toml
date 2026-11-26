@@ -1,6 +1,6 @@
 schema_version = "1.0.0"
 id = "hard_surface_workflow"
-version = "0.3.6"
+version = "0.3.7"
 name = "Hard Surface Workflow"
 tagline = "Edit mesh loops, surfaces and non-destructive modifier stacks"
 maintainer = "Blender AI"
